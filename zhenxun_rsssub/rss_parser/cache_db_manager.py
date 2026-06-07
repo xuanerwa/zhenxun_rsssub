@@ -1,12 +1,7 @@
 from sqlite3 import Connection
 from typing import Any, Literal
 
-from nonebot import logger
-from pyquery import PyQuery as pq
-
 from ..globals import plugin_config
-from .image_processor import get_image_hash
-from .utils import get_summary
 
 
 def initialize_cache_db(conn: Connection) -> None:
@@ -17,7 +12,6 @@ def initialize_cache_db(conn: Connection) -> None:
     "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     "title" TEXT,
     "link" TEXT,
-    "image_hash" TEXT,
     "datetime" TEXT DEFAULT (DATETIME('Now', 'LocalTime'))
 );"""
     )
@@ -36,8 +30,9 @@ def initialize_cache_db(conn: Connection) -> None:
 async def is_entry_duplicated(
     conn: Connection,
     entry: dict[str, Any],
-    deduplication_modes: set[Literal["title", "link", "image", "or"]],
-    use_proxy: bool,
+    deduplication_modes: set[Literal["title", "link", "or"]],
+    *,
+    dry_run: bool = False,
 ) -> bool:
     cursor = conn.cursor()
     title = entry["title"]
@@ -58,29 +53,12 @@ async def is_entry_duplicated(
                 case "link":
                     sql_conditions.append("link=?")
                     sql_args.append(link)
-                case "image":
-                    try:
-                        summary_doc = pq(get_summary(entry))
-                    except Exception as e:
-                        # 无正文内容，跳过图片去重
-                        logger.warning(e)
-                        continue
-                    image_doc = summary_doc("img")
-                    if len(image_doc) != 1:
-                        # 仅处理只有一张图片的消息
-                        continue
-                    url = image_doc.attr("src")
-                    image_hash = await get_image_hash(url, use_proxy)
-                    if image_hash:
-                        sql_conditions.append("image_hash=?")
-                        sql_args.append(image_hash)
-                        entry["image_hash"] = image_hash
 
-        # 如果没有有效条件，直接返回 False
+        # Return early when no configured deduplication field is usable.
         if not sql_conditions:
             return False
 
-        # 构建查询条件
+        # Combine title/link checks with AND by default, OR when requested.
         if "or" in deduplication_modes:
             sql = f"SELECT id FROM main WHERE ({' OR '.join(sql_conditions)})"
         else:
@@ -90,12 +68,19 @@ async def is_entry_duplicated(
         result = cursor.fetchone()
 
         if result is not None:
-            result_id = result[0]
-            cursor.execute(
-                "UPDATE main SET datetime = DATETIME('Now','LocalTime') WHERE id = ?;",
-                (result_id,),
-            )
-            conn.commit()
+            before = None
+            if dry_run:
+                before = conn.total_changes
+            if not dry_run:
+                result_id = result[0]
+                cursor.execute(
+                    "UPDATE main SET datetime = DATETIME('Now','LocalTime') "
+                    "WHERE id = ?;",
+                    (result_id,),
+                )
+                conn.commit()
+            elif before != conn.total_changes:
+                raise RuntimeError("dry-run dedup check unexpectedly changed database")
             return True
 
         return False
@@ -108,10 +93,9 @@ def insert_into_cache_db(conn: Connection, entry: dict[str, Any]) -> None:
     cursor = conn.cursor()
     title = entry["title"]
     link = entry["link"]
-    image_hash = entry.get("image_hash")
     cursor.execute(
-        "INSERT INTO main (title, link, image_hash) VALUES (?, ?, ?);",
-        (title, link, image_hash),
+        "INSERT INTO main (title, link) VALUES (?, ?);",
+        (title, link),
     )
     cursor.close()
     conn.commit()

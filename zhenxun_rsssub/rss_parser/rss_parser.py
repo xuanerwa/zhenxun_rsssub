@@ -1,15 +1,13 @@
+from collections.abc import Awaitable, Callable
 import re
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
-
-from nonebot import require
-from tinydb import TinyDB
-
-require("nonebot_plugin_localstore")
-import nonebot_plugin_localstore as store
+from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
     from ..rss import RSS
 
+from ..delivery import build_delivery_targets
+from ..repository_delivery import delivered_target_keys
+from ..repository_entries import load_entries
 from ..utils import chunk_list
 from .context import Context
 
@@ -28,8 +26,10 @@ class ParsingHandler:
         Args:
             func (Callable[..., Any]): 处理逻辑
             pattern (str): 适用的订阅链接模式
-            priority (int): 处理优先级，优先级相同时会弃用默认处理器 (即 `pattern=r"(.*)` 处理器)
-            halt (bool): 是否中止后续处理 (不执行默认处理需要设置为 `halt=True` 且 `priority<50`)
+            priority (int): 处理优先级，优先级相同时会弃用默认处理器
+                (即 `pattern=r"(.*)` 处理器)
+            halt (bool): 是否中止后续处理
+                (不执行默认处理需要设置为 `halt=True` 且 `priority<50`)
         """
         self.func = func
         self.pattern = pattern
@@ -43,9 +43,9 @@ class ParsingHandler:
 
 
 class ParsingHandlerManager:
-    preprocess_handlers: list[ParsingHandler] = []
-    process_handlers: list[ParsingHandler] = []
-    postprocess_handlers: list[ParsingHandler] = []
+    preprocess_handlers: ClassVar[list[ParsingHandler]] = []
+    process_handlers: ClassVar[list[ParsingHandler]] = []
+    postprocess_handlers: ClassVar[list[ParsingHandler]] = []
 
     @classmethod
     def preprocess_handler(
@@ -116,25 +116,35 @@ class RSSParser:
             ParsingHandlerManager.postprocess_handlers, self.rss.get_url()
         )
 
-    async def parse(self, data: dict[str, Any]):
+    async def parse(self, data: dict[str, Any], *, dry_run: bool = False) -> Context:
         title = data["feed"]["title"]
         entries = data["entries"]
-        rss_entries_file = store.get_plugin_data_file(
-            f"{self.rss.sanitized_name}.json"
-        )
-        db = TinyDB(
-            rss_entries_file,
-            encoding="utf-8",
-            sort_keys=True,
-            indent=4,
-            ensure_ascii=False,
-        )
+        saved_entries = load_entries(self.rss.name)
 
         # 初始化上下文对象
         self.context.title = title
         self.context.entries = entries
-        self.context.tinydb = db
+        self.context.rss_name = self.rss.name
+        self.context.targets = build_delivery_targets(
+            self.rss.user_id, self.rss.group_id
+        )
+        self.context.target_keys = {
+            (target.target_type, str(target.target_id))
+            for target in self.context.targets
+        }
+        self.context.old_entry_hashes = set()
+        for entry in saved_entries:
+            entry_hash = str(entry.get("hash") or "")
+            if not entry_hash:
+                continue
+            legacy_pending = bool(entry.get("to_send"))
+            if legacy_pending:
+                continue
+            delivered = delivered_target_keys(self.rss.name, entry_hash)
+            if not delivered or self.context.target_keys <= delivered:
+                self.context.old_entry_hashes.add(entry_hash)
         self.context.msg_title = f"【{title}】更新了！"
+        self.context.dry_run = dry_run
 
         # RSS 解析预处理
         await self._preprocess()
@@ -143,7 +153,7 @@ class RSSParser:
             # 没有新增的 RSS 文章
             # RSS 解析后处理
             await self._postprocess()
-            return
+            return self.context
 
         # 为避免发送消息过于频繁，每 5 条更新发送一次消息
         for chunk in chunk_list(self.context.new_entries, 5):
@@ -152,7 +162,9 @@ class RSSParser:
                 await self._process()
                 self.context.flush_msg_buffer()
             await self._postprocess()
-            self.context.flush_msg_contents()
+            if not dry_run:
+                self.context.flush_msg_contents()
+        return self.context
 
     async def _preprocess(self):
         await _execute_handlers(self.preprocess_handlers, self.context, self.rss)

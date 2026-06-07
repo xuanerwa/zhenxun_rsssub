@@ -1,17 +1,15 @@
-from nonebot.adapters.onebot.v11 import GroupMessageEvent, PrivateMessageEvent
-
+from ..host_adapter import get_event_target
 from ..rss import RSS
 from ..scheduler import create_rss_update_job, remove_rss_update_job
-from . import elf
+from . import rss_cmd
 
 
-@elf.assign("del")
-async def delete_rss(
-    event: PrivateMessageEvent | GroupMessageEvent, names: tuple[str, ...]
-):
+@rss_cmd.assign("删除")
+async def delete_rss(event, names: tuple[str, ...]):
     success: list[str] = []
     fail: list[str] = []
 
+    target = get_event_target(event)
     for name in names:
         rss = RSS.get_by_name(name)
         if rss is None:
@@ -19,10 +17,10 @@ async def delete_rss(
             continue
 
         done = False
-        if isinstance(event, PrivateMessageEvent):
-            done = rss.remove_subscriber(user_id=event.user_id)
-        elif isinstance(event, GroupMessageEvent):
-            done = rss.remove_subscriber(group_id=event.group_id)
+        if target.scene_type == "private" and target.user_id is not None:
+            done = rss.remove_subscriber(user_id=target.user_id)
+        elif target.scene_type == "group" and target.group_id is not None:
+            done = rss.remove_subscriber(group_id=target.group_id)
 
         if not done:
             fail.append(name)
@@ -39,4 +37,4 @@ async def delete_rss(
         msgs.append(f"👏 成功取消订阅：{'，'.join(success)}")
     if fail:
         msgs.append(f"❌ 未找到订阅：{'，'.join(fail)}")
-    await elf.finish("\n".join(msgs))
+    await rss_cmd.finish("\n".join(msgs))

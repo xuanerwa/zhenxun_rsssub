@@ -1,43 +1,54 @@
 import contextlib
-import hashlib
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Optional
+import hashlib
+import json
+import time
+from typing import Any
 
-import arrow
-from asyncache import cached
-from cachetools import TTLCache
 from nonebot import logger
 from nonebot.adapters.onebot.v11 import Bot
 
-from .globals import plugin_config
+_BOT_LIST_CACHE_TTL = 300
+_friend_id_cache: dict[str, tuple[float, set[int]]] = {}
+_group_id_cache: dict[str, tuple[float, set[int]]] = {}
 
 
-def get_proxy(use_proxy: bool) -> Optional[str]:
-    if not use_proxy or not plugin_config.proxy:
+def _cache_get(cache: dict[str, tuple[float, set[int]]], key: str) -> set[int] | None:
+    item = cache.get(key)
+    if item is None:
         return None
-    return str(plugin_config.proxy)
+    expires_at, value = item
+    if expires_at <= time.monotonic():
+        cache.pop(key, None)
+        return None
+    return value
 
 
-async def send_msg_to_superusers(bot: Bot, superusers: set[str], msg: str):
-    try:
-        for su in superusers:
-            await bot.send_private_msg(user_id=int(su), message=f"ELF_RSS: {msg}")
-    except Exception as e:
-        logger.error(f"消息推送至超级用户失败: {e}")
+def _cache_set(cache: dict[str, tuple[float, set[int]]], key: str, value: set[int]):
+    cache[key] = (time.monotonic() + _BOT_LIST_CACHE_TTL, value)
 
 
-@cached(TTLCache(maxsize=1, ttl=300))
 async def get_bot_friend_id_list(bot: Bot) -> set[int]:
     """获取机器人好友列表，结果缓存5分钟"""
+    cached = _cache_get(_friend_id_cache, bot.self_id)
+    if cached is not None:
+        return cached
     friends = await bot.get_friend_list()
-    return {friend["user_id"] for friend in friends}
+    result = {friend["user_id"] for friend in friends}
+    _cache_set(_friend_id_cache, bot.self_id, result)
+    return result
 
 
-@cached(TTLCache(maxsize=1, ttl=300))
 async def get_bot_group_id_list(bot: Bot) -> set[int]:
     """获取机器人群组列表，结果缓存5分钟"""
+    cached = _cache_get(_group_id_cache, bot.self_id)
+    if cached is not None:
+        return cached
     groups = await bot.get_group_list()
-    return {group["group_id"] for group in groups}
+    result = {group["group_id"] for group in groups}
+    _cache_set(_group_id_cache, bot.self_id, result)
+    return result
 
 
 async def extract_valid_user_id(bot: Bot, user_ids: set[int]) -> set[int]:
@@ -64,26 +75,54 @@ async def extract_valid_group_id(bot: Bot, group_ids: set[int]) -> set[int]:
 
 def extract_entry_fields(entry: dict[str, Any]) -> dict[str, Any]:
     """提取RSS文章中需要的字段"""
-    wanted = ["guid", "title", "link", "published", "updated", "hash"]
+    wanted = [
+        "id",
+        "guid",
+        "title",
+        "link",
+        "published",
+        "updated",
+        "entry_key",
+        "hash",
+    ]
     if entry.get("to_send"):
         wanted += ["to_send", "content", "summary"]
     return {k: v for k in wanted if (v := entry.get(k))}
 
 
 def get_entry_hash(entry: dict[str, Any]) -> str:
-    """计算RSS文章的哈希值"""
-    unique_str = str(entry.get("guid", entry.get("link", "")))
+    """Build a stable RSS/Atom entry key and hash.
+
+    Priority: id/guid > link > title + published/updated > title hash.
+    """
+    entry_id = entry.get("id") or entry.get("guid")
+    if entry_id:
+        unique_str = f"id:{entry_id}"
+    elif link := entry.get("link"):
+        unique_str = f"link:{link}"
+    elif title := entry.get("title"):
+        date_text = entry.get("published") or entry.get("updated")
+        if date_text:
+            unique_str = f"title-date:{title}|{date_text}"
+        else:
+            unique_str = f"title:{title}"
+    else:
+        unique_str = json.dumps(entry, sort_keys=True, ensure_ascii=False)
+    entry["entry_key"] = unique_str
     return hashlib.md5(unique_str.encode("utf-8")).hexdigest()
 
 
-def get_entry_datetime(entry: dict[str, Any]):
-    datetime = entry.get("published", entry.get("updated"))
-    if not datetime:
-        return arrow.now()
+def get_entry_datetime(entry: dict[str, Any]) -> datetime:
+    date_text = entry.get("published", entry.get("updated"))
+    if not date_text:
+        return datetime.now(timezone.utc)
 
     with contextlib.suppress(Exception):
-        datetime = parsedate_to_datetime(datetime)
-    return arrow.get(datetime)
+        parsed = parsedate_to_datetime(date_text)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return datetime.now(timezone.utc)
 
 
 def chunk_list(lst: list[Any], chunk_size: int):

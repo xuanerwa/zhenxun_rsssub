@@ -1,143 +1,182 @@
-import base64
-import random
-import re
+import asyncio
+import hashlib
 from io import BytesIO
-from typing import Optional, Union
+import random
+import time
 
-import aiohttp
-import imagehash
 from nonebot import logger, require
 from PIL import Image, UnidentifiedImageError
-from pyquery import PyQuery as pq
-from tenacity import RetryError, retry, stop_after_attempt, stop_after_delay
+from tenacity import retry, stop_after_attempt, stop_after_delay
 from yarl import URL
 
 require("nonebot_plugin_localstore")
 import nonebot_plugin_localstore as store
 
 from ..globals import plugin_config
+from ..http_client import get_bytes_response, get_proxy
+from ..rss_message import RssImage
+
+IMAGE_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "image/avif",
+    "image/heic",
+    "image/heif",
+    "image/svg+xml",
+}
+
+_download_semaphore: asyncio.Semaphore | None = None
+_image_cache: dict[str, tuple[float, bytes]] = {}
+_image_cache_lock = asyncio.Lock()
+ACCEPT_IMAGE_ERROR_STATUS_CODES = tuple(range(400, 500))
 
 
-async def fuck_pixiv_cat(url: str) -> str:
-    img_id = re.sub("https://pixiv.cat/", "", url)
-    img_id = img_id[:-4]
-    info_list = img_id.split("-")
-    async with aiohttp.ClientSession() as session:
-        try:
-            resp = await session.get(
-                f"https://api.obfs.dev/api/pixiv/illust?id={info_list[0]}"
-            )
-            resp_json = await resp.json()
-            if len(info_list) >= 2:
-                return str(
-                    resp_json["illust"]["meta_pages"][int(info_list[1]) - 1][
-                        "image_urls"
-                    ]["original"]
-                )
-            else:
-                return str(
-                    resp_json["illust"]["meta_single_page"]["original_image_url"]
-                )
-        except Exception as e:
-            logger.error(f"处理 pixiv.cat 链接[{url}]时出现问题: {e}")
-            return url
+def _download_limit() -> int:
+    return max(1, int(plugin_config.media_download_concurrency or 1))
 
 
-@retry(stop=(stop_after_attempt(5) | stop_after_delay(30)))
-async def download_image(url: str, use_proxy: bool) -> Optional[bytes]:
-    async with aiohttp.ClientSession(raise_for_status=True) as session:
-        referer = f"{URL(url).scheme}://{URL(url).host}/"
-        headers = {"referer": referer}
-        resp = await session.get(
-            url, headers=headers, proxy=(plugin_config.proxy if use_proxy else None)
+def _get_download_semaphore() -> asyncio.Semaphore:
+    global _download_semaphore
+    limit = _download_limit()
+    if _download_semaphore is None:
+        _download_semaphore = asyncio.Semaphore(limit)
+    return _download_semaphore
+
+
+def _normalize_content_type(content_type: str | None) -> str:
+    return (content_type or "").split(";", 1)[0].strip().lower()
+
+
+def _looks_like_image_url(url: str) -> bool:
+    lower = url.lower()
+    return any(
+        lower.split("?", 1)[0].endswith(ext)
+        for ext in (
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".webp",
+            ".bmp",
+            ".avif",
+            ".heic",
+            ".heif",
+            ".svg",
         )
-        content = await resp.read()
+    )
 
-        # 如果图片无法获取到，直接返回
-        if len(content) == 0:
-            if "pixiv.cat" in url:
-                url = await fuck_pixiv_cat(url)
-                return await download_image(url, use_proxy)
-            logger.error(
-                f"图片[{url}]下载失败 Content-Type: {resp.headers['Content-Type']} status: {resp.status}"
-            )
+
+def _is_valid_image_response(
+    url: str, content_type: str | None, content: bytes
+) -> bool:
+    normalized = _normalize_content_type(content_type)
+    if normalized in IMAGE_CONTENT_TYPES:
+        return True
+    if normalized in {"text/html", "text/plain", "application/json"}:
+        return False
+    # Some feeds omit Content-Type for image CDNs. Allow only if Pillow can identify it.
+    if _looks_like_image_url(url):
+        try:
+            Image.open(BytesIO(content)).verify()
+            return True
+        except Exception:
+            return False
+    return False
+
+
+async def _get_cached_image(key: str) -> bytes | None:
+    async with _image_cache_lock:
+        cached = _image_cache.get(key)
+        if not cached:
             return None
-
-        # 如果图片格式为 SVG ，先转换为 PNG
-        if resp.headers["Content-Type"].startswith("image/svg+xml"):
-            next_url = str(
-                URL("https://images.weserv.nl/").with_query(f"url={url}&output=png")
-            )
-            return await download_image(next_url, use_proxy)
-
+        expires_at, content = cached
+        if expires_at <= time.monotonic():
+            _image_cache.pop(key, None)
+            return None
         return content
 
 
-async def get_image_hash(url: str, use_proxy: bool) -> Optional[str]:
-    try:
-        content = await download_image(url, use_proxy)
-        if not content:
-            return None
-    except RetryError:
-        logger.error(f"图片[{url}]下载失败，已到达最大重试次数，请检查代理设置")
-        return None
-
-    try:
-        image = Image.open(BytesIO(content))
-    except UnidentifiedImageError:
-        return None
-
-    # GIF 图片的 image_hash 实际上是第一帧的值，为了避免误伤直接跳过
-    if image.format == "GIF":
-        return None
-
-    return str(imagehash.dhash(image))
+async def _set_cached_image(url: str, content: bytes) -> None:
+    ttl = max(0, int(plugin_config.media_cache_ttl_seconds or 0))
+    if ttl <= 0:
+        return
+    digest_key = f"sha256:{hashlib.sha256(content).hexdigest()}"
+    async with _image_cache_lock:
+        max_items = max(2, int(plugin_config.media_cache_max_items or 2))
+        if cached := _image_cache.get(digest_key):
+            expires_at, cached_content = cached
+            if expires_at > time.monotonic():
+                content = cached_content
+        while len(_image_cache) > max_items - 2:
+            oldest = min(_image_cache, key=lambda key: _image_cache[key][0])
+            _image_cache.pop(oldest, None)
+        expires_at = time.monotonic() + ttl
+        _image_cache[f"url:{url}"] = (expires_at, content)
+        _image_cache[digest_key] = (expires_at, content)
 
 
 @retry(stop=(stop_after_attempt(5) | stop_after_delay(30)))
-async def resize_gif(
-    url: str, use_proxy: bool, resize_ratio: int = 2
-) -> Optional[bytes]:
-    """通过 ezgif 压缩 GIF"""
-    async with aiohttp.ClientSession() as session:
-        resp = await session.post(
-            "https://s3.ezgif.com/resize",
-            data={"new-image-url": url},
-            proxy=(plugin_config.proxy if use_proxy else None),
+async def download_image(url: str, use_proxy: bool) -> bytes | None:
+    url = str(url)
+    if cached := await _get_cached_image(f"url:{url}"):
+        return cached
+
+    referer = f"{URL(url).scheme}://{URL(url).host}/"
+    headers = {"referer": referer}
+    async with _get_download_semaphore():
+        resp = await get_bytes_response(
+            url,
+            headers=headers,
+            proxy=get_proxy(use_proxy),
+            timeout=10,
+            accept_status_codes=ACCEPT_IMAGE_ERROR_STATUS_CODES,
         )
-        d = pq(await resp.text())
-        next_url = d("form").attr("action")
-        _file = d("form > input[type=hidden]:nth-child(1)").attr("value")
-        token = d("form > input[type=hidden]:nth-child(2)").attr("value")
-        old_width = d("form > input[type=hidden]:nth-child(3)").attr("value")
-        old_height = d("form > input[type=hidden]:nth-child(4)").attr("value")
-        data = {
-            "file": _file,
-            "token": token,
-            "old_width": old_width,
-            "old_height": old_height,
-            "width": str(int(old_width) // resize_ratio),
-            "method": "gifsicle",
-            "ar": "force",
-        }
-        resp = await session.post(
-            next_url,
-            params="ajax=true",
-            data=data,
-            proxy=(plugin_config.proxy if use_proxy else None),
+    content = resp.content
+
+    if resp.status >= 400:
+        logger.warning(
+            f"Image [{url}] download rejected. "
+            f"Content-Type: {resp.headers.get('content-type')} status: {resp.status}"
         )
-        d = pq(await resp.text())
-        output_img_url = "https:" + d("img:nth-child(1)").attr("src")
-        return await download_image(output_img_url, use_proxy)
+        return None
+
+    if len(content) == 0:
+        logger.error(
+            f"Image [{url}] download failed. Content-Type: "
+            f"{resp.headers.get('content-type')} status: {resp.status}"
+        )
+        return None
+
+    content_type = resp.headers.get("content-type")
+    if not _is_valid_image_response(url, content_type, content):
+        logger.warning(
+            f"Image [{url}] ignored due to invalid Content-Type: "
+            f"{content_type} status: {resp.status}"
+        )
+        return None
+
+    # Convert SVG through the same external image proxy used by the original code.
+    if _normalize_content_type(content_type) == "image/svg+xml":
+        next_url = str(
+            URL("https://images.weserv.nl/").with_query(f"url={url}&output=png")
+        )
+        return await download_image(next_url, use_proxy)
+
+    await _set_cached_image(url, content)
+    return content
 
 
 async def compress_image(
     url: URL, content: bytes, use_proxy: bool
-) -> Optional[Union[Image.Image, bytes]]:
+) -> Image.Image | bytes | None:
     try:
         image = Image.open(BytesIO(content))
     except UnidentifiedImageError:
-        logger.error(f"无法识别图像文件")
+        logger.error("无法识别图像文件")
         return None
 
     if image.format != "GIF":
@@ -158,11 +197,11 @@ async def compress_image(
             image.putpixel((x, y), random.randint(0, 255))
         return image
     else:
-        if len(content) > plugin_config.gif_compress_size * 1024:
-            try:
-                return await resize_gif(str(url), use_proxy)
-            except RetryError:
-                logger.error(f"GIF压缩失败，将发送原图")
+        if (
+            plugin_config.enable_online_gif_compress
+            and len(content) > plugin_config.gif_compress_size * 1024
+        ):
+            logger.warning("Online GIF compression was removed; send original GIF")
         return content
 
 
@@ -174,27 +213,45 @@ def save_image(dir: str, name: str, content: bytes):
     logger.debug(f"图片已保存至: {file_path}")
 
 
-def get_image_base64(content: Union[Image.Image, bytes, None]) -> str:
+def get_image_bytes(content: Image.Image | bytes | None) -> bytes | None:
     if not content:
-        return ""
+        return None
     if isinstance(content, Image.Image):
         with BytesIO() as output:
-            content.save(output, format=content.format)
-            content = output.getvalue()
+            content.save(output, format=content.format or "PNG")
+            return output.getvalue()
     if isinstance(content, bytes):
-        return str(base64.b64encode(content).decode())
-    return ""
+        return content
+    return None
 
 
-async def get_image_cqcode(
-    url: URL, use_proxy: bool, save: bool, dir: str, content: Optional[bytes] = None
-) -> str:
-    """获取图片的 CQ 码并保存"""
+async def get_rss_image(
+    url: URL,
+    use_proxy: bool,
+    save: bool,
+    dir: str,
+    content: bytes | None = None,
+    *,
+    remaining_bytes: int | None = None,
+) -> RssImage:
+    """Download, optionally compress and save an image for later delivery."""
     missing_image_msg = f"图片走丢啦！链接：{url}"
     if not content:
         content = await download_image(url, use_proxy)
     if not content:
-        return missing_image_msg
+        return RssImage(
+            url=str(url),
+            name=url.name or "image.png",
+            missing_text=missing_image_msg,
+        )
+
+    if remaining_bytes is not None and len(content) > remaining_bytes:
+        return RssImage(
+            url=str(url),
+            name=url.name or "image.png",
+            missing_text=f"图片超过本轮下载预算，已跳过：{url}",
+            bytes_used=len(content),
+        )
 
     if save:
         try:
@@ -204,9 +261,22 @@ async def get_image_cqcode(
 
     compressed_content = await compress_image(url, content, use_proxy)
     if not compressed_content:
-        return missing_image_msg
+        return RssImage(
+            url=str(url),
+            name=url.name or "image.png",
+            missing_text=missing_image_msg,
+        )
 
-    image_base64 = get_image_base64(compressed_content)
-    if not image_base64:
-        return missing_image_msg
-    return f"[CQ:image,file=base64://{image_base64}]"
+    image_bytes = get_image_bytes(compressed_content)
+    if not image_bytes:
+        return RssImage(
+            url=str(url),
+            name=url.name or "image.png",
+            missing_text=missing_image_msg,
+        )
+    return RssImage(
+        raw=image_bytes,
+        url=str(url),
+        name=url.name or "image.png",
+        bytes_used=len(content),
+    )

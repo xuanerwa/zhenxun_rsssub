@@ -1,126 +1,106 @@
-import re
 from html import unescape as html_unescape
+import re
 
-from pyquery import PyQuery as pq
+from bs4 import BeautifulSoup, FeatureNotFound
 from yarl import URL
 
 from ..globals import plugin_config
 
 
-def _handle_lists(html: pq, rss_str: str) -> str:
-    """处理 <li> <ul> <ol> 标签"""
-    for ul in html("ul").items():
-        for li in ul("li").items():
-            li_str_search = re.search("<li>(.+)</li>", repr(str(li)))
-            rss_str = rss_str.replace(str(li), f"\n- {li_str_search[1]}").replace(
-                "\\n", "\n"
-            )
-    for ol in html("ol").items():
-        for index, li in enumerate(ol("li").items()):
-            li_str_search = re.search("<li>(.+)</li>", repr(str(li)))
-            rss_str = rss_str.replace(
-                str(li), f"\n{index + 1}. {li_str_search[1]}"
-            ).replace("\\n", "\n")
-    rss_str = re.sub("</(ul|ol)>", "\n", rss_str)
-    # 处理没有被 ul / ol 标签包围的 li 标签
-    rss_str = rss_str.replace("<li>", "- ").replace("</li>", "")
-    return rss_str
+def _soup(html: object) -> BeautifulSoup:
+    try:
+        return BeautifulSoup(str(html), "lxml")
+    except FeatureNotFound:
+        return BeautifulSoup(str(html), "html.parser")
 
 
-def _handle_links(html: pq, rss_str: str) -> str:
-    """处理 <a> 标签"""
-    for a in html("a").items():
-        a_str = re.search(
-            r"<a [^>]+>.*?</a>", html_unescape(str(a)), flags=re.DOTALL
-        ).group()
-        if a.text() and str(a.text()) != a.attr("href"):
-            # 去除微博超话
-            if re.search(
-                r"https://m\.weibo\.cn/p/index\?extparam=\S+&containerid=\w+",
-                a.attr("href"),
-            ):
-                rss_str = rss_str.replace(a_str, "")
-            # 去除微博话题对应链接和微博用户主页链接，只保留文本
-            elif (
-                a.attr("href").startswith("https://m.weibo.cn/search?containerid=")
-                and re.search("#.+#", a.text())
-            ) or (
-                a.attr("href").startswith("https://weibo.com/")
-                and a.text().startswith("@")
-            ):
-                rss_str = rss_str.replace(a_str, a.text())
-            else:
-                if a.attr("href").startswith("https://weibo.cn/sinaurl?u="):
-                    a.attr("href", URL(a.attr("href")).query["u"])
-                rss_str = rss_str.replace(a_str, f" {a.text()}: {a.attr('href')}\n")
-        else:
-            rss_str = rss_str.replace(a_str, f" {a.attr('href')}\n")
-    return rss_str
+def _normalize_weibo_link(text: str, href: str) -> str:
+    if re.search(r"https://m\.weibo\.cn/p/index\?extparam=\S+&containerid=\w+", href):
+        return ""
+    if (
+        href.startswith("https://m.weibo.cn/search?containerid=")
+        and re.search("#.+#", text)
+    ) or (href.startswith("https://weibo.com/") and text.startswith("@")):
+        return text
+    if href.startswith("https://weibo.cn/sinaurl?u="):
+        href = URL(href).query.get("u", href)
+    return f" {text}: {href}\n" if text and text != href else f" {href}\n"
 
 
-def handle_html_tags(html: pq) -> str:
-    rss_str = html_unescape(str(html))
+def _replace_links(soup: BeautifulSoup) -> None:
+    for a in soup.find_all("a"):
+        href = a.get("href") or ""
+        text = a.get_text(strip=True)
+        a.replace_with(_normalize_weibo_link(text, href))
 
-    rss_str = _handle_lists(html, rss_str)
-    rss_str = _handle_links(html, rss_str)
 
-    # 处理一些 HTML 标签
-    html_tags = [
-        "b",
-        "blockquote",
-        "code",
-        "dd",
-        "del",
-        "div",
-        "dl",
-        "dt",
-        "em",
-        "figure",
-        "font",
-        "i",
-        "iframe",
-        "ol",
-        "p",
-        "pre",
-        "s",
-        "small",
-        "span",
-        "strong",
-        "sub",
-        "table",
-        "tbody",
-        "td",
-        "th",
-        "thead",
-        "tr",
-        "u",
-        "ul",
+def _format_lists(soup: BeautifulSoup) -> None:
+    for list_tag in soup.find_all(["ul", "ol"]):
+        ordered = list_tag.name == "ol"
+        lines = []
+        for index, li in enumerate(list_tag.find_all("li", recursive=False), start=1):
+            prefix = f"{index}." if ordered else "-"
+            lines.append(f"{prefix} {li.get_text(' ', strip=True)}")
+        list_tag.replace_with("\n" + "\n".join(lines) + "\n")
+
+    for li in soup.find_all("li"):
+        li.replace_with(f"- {li.get_text(' ', strip=True)}")
+
+
+def _insert_block_breaks(soup: BeautifulSoup) -> None:
+    for br in soup.find_all(["br", "hr"]):
+        br.replace_with("\n")
+    for tag in soup.find_all(["p", "pre"]):
+        tag.append("\n\n")
+    for tag in soup.find_all(re.compile(r"^h[1-6]$")):
+        tag.insert_before("\n")
+        tag.append("\n")
+
+
+def _remove_ignored_tags(soup: BeautifulSoup) -> None:
+    for tag in soup.find_all(["img", "video", "iframe"]):
+        tag.decompose()
+    if not plugin_config.blockquote:
+        for tag in soup.find_all("blockquote"):
+            tag.decompose()
+
+
+def _clean_text(text: str) -> str:
+    text = html_unescape(text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+    text = text.strip()
+    if 0 < plugin_config.max_length < len(text):
+        text = f"{text[: plugin_config.max_length]}..."
+    return text
+
+
+def handle_html_tags(html: object) -> str:
+    soup = _soup(html)
+    _remove_ignored_tags(soup)
+    _replace_links(soup)
+    _format_lists(soup)
+    _insert_block_breaks(soup)
+    return _clean_text(soup.get_text())
+
+
+def extract_image_urls(html: str) -> list[str]:
+    soup = _soup(html)
+    return [src for img in soup.find_all("img") if (src := img.get("src"))]
+
+
+def extract_video_poster_urls(html: str) -> list[str]:
+    soup = _soup(html)
+    return [
+        poster for video in soup.find_all("video") if (poster := video.get("poster"))
     ]
 
-    # <p> <pre> 标签后增加俩个换行
-    for i in ["p", "pre"]:
-        rss_str = re.sub(f"</{i}>", f"</{i}>\n\n", rss_str)
 
-    # 直接去掉标签，留下内部文本信息
-    for i in html_tags:
-        rss_str = re.sub(f"<{i} [^>]+>", "", rss_str)
-        rss_str = re.sub(f"</?{i}>", "", rss_str)
-
-    rss_str = re.sub(r"<(br|hr)\s?/?>|<(br|hr) [^>]+>", "\n", rss_str)
-    rss_str = re.sub(r"<h\d [^>]+>", "\n", rss_str)
-    rss_str = re.sub(r"</?h\d>", "\n", rss_str)
-
-    # 删除图片、视频标签
-    rss_str = re.sub(
-        r"<video[^>]*>(.*?</video>)?|<img[^>]+>", "", rss_str, flags=re.DOTALL
-    )
-
-    # 去掉多余换行
-    while "\n\n\n" in rss_str:
-        rss_str = rss_str.replace("\n\n\n", "\n\n")
-    rss_str = rss_str.strip()
-
-    if 0 < plugin_config.max_length < len(rss_str):
-        rss_str = f"{rss_str[: plugin_config.max_length]}..."
-
-    return rss_str
+def html_text(html: str, *, remove_blockquote: bool = False) -> str:
+    soup = _soup(html)
+    if remove_blockquote:
+        for tag in soup.find_all("blockquote"):
+            tag.decompose()
+    return soup.get_text()
