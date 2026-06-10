@@ -11,9 +11,11 @@ from typing import Literal
 from nonebot import logger
 from nonebot.adapters import Bot as BaseBot
 from nonebot.adapters.onebot.v11 import Bot, Message, MessageSegment
-from nonebot_plugin_alconna import FallbackStrategy, Target, UniMessage
+from nonebot_plugin_alconna import FallbackStrategy, UniMessage
 
-from .globals import global_config
+from zhenxun.utils.platform import PlatformUtils
+
+from .globals import global_config, plugin_config
 from .host_adapter import resolve_onebot
 from .rss_message import RssImage, RssMessage
 
@@ -77,22 +79,49 @@ def delivery_result(
     )
 
 
+def _send_timeout_seconds() -> int:
+    value = getattr(plugin_config, "message_send_timeout_seconds", 12)
+    return max(1, int(value or 12))
+
+
+def _reply_message_id(
+    reply_to: dict[tuple[str, int], str] | None,
+    target_type: Literal["private", "group"],
+    target_id: int,
+) -> str | None:
+    return (reply_to or {}).get((target_type, target_id))
+
+
 async def send_onebot_message_with_lock(
     bot: Bot,
     target_id: int,
     target_type: Literal["private", "group"],
     msg: Message,
+    *,
+    reply_to_message_id: str | None = None,
 ) -> DeliveryResult:
     start_time = time.monotonic()
     target = DeliveryTarget(target_type, target_id)
     async with sending_lock[(target_id, target_type)]:
         try:
-            response = await bot.send_msg(
-                message_type=target_type,
-                user_id=target_id,
-                group_id=target_id,
-                message=msg,
+            message = msg
+            if reply_to_message_id:
+                message = MessageSegment.reply(int(reply_to_message_id)) + msg
+            response = await asyncio.wait_for(
+                bot.send_msg(
+                    message_type=target_type,
+                    user_id=target_id,
+                    group_id=target_id,
+                    message=message,
+                ),
+                timeout=_send_timeout_seconds(),
             )
+        except asyncio.TimeoutError:
+            error = f"send_msg timed out after {_send_timeout_seconds()}s"
+            logger.error(
+                f"Failed to send RSS message to {target_type}({target_id}): {error}"
+            )
+            result = delivery_result(target, status="failed", error=error)
         except Exception as e:
             logger.error(
                 f"Failed to send RSS message to {target_type}({target_id}): {e}"
@@ -132,7 +161,7 @@ def build_onebot_message(bot: Bot, message: RssMessage | list[RssMessage]) -> Me
                 int(bot.self_id),
                 next(iter(global_config.nickname))
                 if global_config.nickname
-                else "\u200b",
+                else "订阅姬",
                 content=build_onebot_single_message(m),
             )
             for m in message
@@ -177,6 +206,7 @@ async def send_message(
     message: RssMessage | list[RssMessage],
     *,
     bot: BaseBot | None = None,
+    reply_to: dict[tuple[str, int], str] | None = None,
 ) -> list[DeliveryResult]:
     bot = bot or resolve_onebot()
     if bot is None:
@@ -186,8 +216,8 @@ async def send_message(
         ]
 
     if isinstance(bot, Bot):
-        return await send_onebot_message(user_id, group_id, message, bot)
-    return await send_uni_message(user_id, group_id, message, bot)
+        return await send_onebot_message(user_id, group_id, message, bot, reply_to)
+    return await send_uni_message(user_id, group_id, message, bot, reply_to)
 
 
 async def send_onebot_message(
@@ -195,6 +225,7 @@ async def send_onebot_message(
     group_id: set[int],
     message: RssMessage | list[RssMessage],
     bot: Bot,
+    reply_to: dict[tuple[str, int], str] | None = None,
 ) -> list[DeliveryResult]:
     wrapped_msg = build_onebot_message(bot, message)
     results: list[DeliveryResult] = []
@@ -202,7 +233,13 @@ async def send_onebot_message(
         results.extend(
             await asyncio.gather(
                 *(
-                    send_onebot_message_with_lock(bot, uid, "private", wrapped_msg)
+                    send_onebot_message_with_lock(
+                        bot,
+                        uid,
+                        "private",
+                        wrapped_msg,
+                        reply_to_message_id=_reply_message_id(reply_to, "private", uid),
+                    )
                     for uid in user_id
                 )
             )
@@ -211,7 +248,13 @@ async def send_onebot_message(
         results.extend(
             await asyncio.gather(
                 *(
-                    send_onebot_message_with_lock(bot, gid, "group", wrapped_msg)
+                    send_onebot_message_with_lock(
+                        bot,
+                        gid,
+                        "group",
+                        wrapped_msg,
+                        reply_to_message_id=_reply_message_id(reply_to, "group", gid),
+                    )
                     for gid in group_id
                 )
             )
@@ -224,21 +267,36 @@ async def _send_uni_to_target(
     target_id: int,
     target_type: Literal["private", "group"],
     message: RssMessage,
+    *,
+    reply_to_message_id: str | None = None,
 ) -> DeliveryResult:
     start_time = time.monotonic()
     delivery_target = DeliveryTarget(target_type, target_id)
     async with sending_lock[(target_id, f"uni:{target_type}")]:
         try:
-            target = Target(
-                id=str(target_id),
-                private=target_type == "private",
-                channel=target_type == "group",
+            target = PlatformUtils.get_target(
+                user_id=str(target_id) if target_type == "private" else None,
+                group_id=str(target_id) if target_type == "group" else None,
             )
-            await build_uni_message(message).send(
-                target=target,
-                bot=bot,
-                fallback=FallbackStrategy.rollback,
+            if target is None:
+                raise ValueError("no available message target")
+            uni_message = build_uni_message(message)
+            if reply_to_message_id:
+                uni_message = UniMessage.reply(reply_to_message_id) + uni_message
+            await asyncio.wait_for(
+                uni_message.send(
+                    target=target,
+                    bot=bot,
+                    fallback=FallbackStrategy.rollback,
+                ),
+                timeout=_send_timeout_seconds(),
             )
+        except asyncio.TimeoutError:
+            error = f"send message timed out after {_send_timeout_seconds()}s"
+            logger.error(
+                f"Failed to send RSS UniMessage to {target_type}({target_id}): {error}"
+            )
+            return delivery_result(delivery_target, status="failed", error=error)
         except Exception as e:
             logger.error(
                 f"Failed to send RSS UniMessage to {target_type}({target_id}): {e}"
@@ -254,6 +312,7 @@ async def send_uni_message(
     group_id: set[int],
     message: RssMessage | list[RssMessage],
     bot: BaseBot,
+    reply_to: dict[tuple[str, int], str] | None = None,
 ) -> list[DeliveryResult]:
     messages = message if isinstance(message, list) else [message]
     results: list[DeliveryResult] = []
@@ -261,13 +320,31 @@ async def send_uni_message(
         if user_id:
             results.extend(
                 await asyncio.gather(
-                    *(_send_uni_to_target(bot, uid, "private", msg) for uid in user_id)
+                    *(
+                        _send_uni_to_target(
+                            bot,
+                            uid,
+                            "private",
+                            msg,
+                            reply_to_message_id=(reply_to or {}).get(("private", uid)),
+                        )
+                        for uid in user_id
+                    )
                 )
             )
         if group_id:
             results.extend(
                 await asyncio.gather(
-                    *(_send_uni_to_target(bot, gid, "group", msg) for gid in group_id)
+                    *(
+                        _send_uni_to_target(
+                            bot,
+                            gid,
+                            "group",
+                            msg,
+                            reply_to_message_id=(reply_to or {}).get(("group", gid)),
+                        )
+                        for gid in group_id
+                    )
                 )
             )
     return results

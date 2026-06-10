@@ -10,10 +10,11 @@ class RssImage:
     name: str = "image.png"
     missing_text: str = ""
     bytes_used: int = 0
+    failed: bool = False
 
     @property
     def available(self) -> bool:
-        return bool(self.raw or self.url)
+        return bool(self.raw or (self.url and not self.failed))
 
 
 @dataclass(slots=True)

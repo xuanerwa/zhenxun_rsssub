@@ -41,6 +41,8 @@ class RssFeed(Model):
     """正文待移除内容"""
     send_merged_msg = fields.BooleanField(default=False, description="是否发送合并消息")
     """是否发送合并消息"""
+    show_hidden_content = fields.BooleanField(default=False, description="是否显示隐藏内容")
+    """是否显示隐藏内容"""
     stop = fields.BooleanField(default=False, description="停止更新")
     """停止更新"""
     etag = fields.CharField(255, null=True, description="HTTP ETag")

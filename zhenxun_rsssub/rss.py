@@ -11,8 +11,8 @@ from pydantic import HttpUrl
 from yarl import URL
 
 from . import feed_state, fetcher, rss_service
-from .globals import plugin_config
 from .fetch_models import FetchResult
+from .globals import plugin_config
 from .repository_entries import delete_entries_file
 from .repository_feeds import (
     load_feed_records,
@@ -60,6 +60,8 @@ class RSS:
     content_to_remove: set[str] = field(default_factory=set)
     # 当一次更新多条消息时，是否尝试发送合并消息
     send_merged_msg: bool = False
+    # 是否显示 Telegram/RSS 中带 spoiler/隐藏标记的内容
+    show_hidden_content: bool = False
     # 停止更新
     stop: bool = False
     # HTTP ETag
@@ -200,11 +202,11 @@ class RSS:
     def destroy(self):
         """删除整个RSS订阅"""
         import asyncio
-        
+
         async def _destroy():
             remove_feed_record(self.name)
             await delete_entries_file(self.name)
-        
+
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():

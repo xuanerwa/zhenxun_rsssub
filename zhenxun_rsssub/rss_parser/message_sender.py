@@ -13,5 +13,6 @@ async def send_message(
     message: RssMessage | list[RssMessage],
     *,
     bot: Bot | None = None,
+    reply_to: dict[tuple[str, int], str] | None = None,
 ) -> list[DeliveryResult]:
-    return await deliver_message(user_id, group_id, message, bot=bot)
+    return await deliver_message(user_id, group_id, message, bot=bot, reply_to=reply_to)

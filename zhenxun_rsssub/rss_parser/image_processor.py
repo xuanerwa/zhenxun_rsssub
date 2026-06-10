@@ -8,12 +8,12 @@ from nonebot import logger, require
 from PIL import Image, UnidentifiedImageError
 from tenacity import retry, stop_after_attempt, stop_after_delay
 from yarl import URL
+from zhenxun.utils.http_utils import AsyncHttpx
 
 require("nonebot_plugin_localstore")
 import nonebot_plugin_localstore as store
 
 from ..globals import plugin_config
-from ..http_client import get_bytes_response, get_proxy
 from ..rss_message import RssImage
 
 IMAGE_CONTENT_TYPES = {
@@ -45,6 +45,13 @@ def _get_download_semaphore() -> asyncio.Semaphore:
     if _download_semaphore is None:
         _download_semaphore = asyncio.Semaphore(limit)
     return _download_semaphore
+
+
+def _image_proxy() -> str | None:
+    media_proxy = getattr(plugin_config, "media_proxy", None)
+    if media_proxy:
+        return str(media_proxy)
+    return None
 
 
 def _normalize_content_type(content_type: str | None) -> str:
@@ -128,26 +135,30 @@ async def download_image(url: str, use_proxy: bool) -> bytes | None:
     referer = f"{URL(url).scheme}://{URL(url).host}/"
     headers = {"referer": referer}
     async with _get_download_semaphore():
-        resp = await get_bytes_response(
+        request_kwargs = {
+            "headers": headers,
+            "timeout": 10,
+            "accept_status_codes": ACCEPT_IMAGE_ERROR_STATUS_CODES,
+        }
+        if proxy := _image_proxy():
+            request_kwargs["proxy"] = proxy
+        resp = await AsyncHttpx.get(
             url,
-            headers=headers,
-            proxy=get_proxy(use_proxy),
-            timeout=10,
-            accept_status_codes=ACCEPT_IMAGE_ERROR_STATUS_CODES,
+            **request_kwargs,
         )
     content = resp.content
 
-    if resp.status >= 400:
+    if resp.status_code >= 400:
         logger.warning(
             f"Image [{url}] download rejected. "
-            f"Content-Type: {resp.headers.get('content-type')} status: {resp.status}"
+            f"Content-Type: {resp.headers.get('content-type')} status: {resp.status_code}"
         )
         return None
 
     if len(content) == 0:
         logger.error(
             f"Image [{url}] download failed. Content-Type: "
-            f"{resp.headers.get('content-type')} status: {resp.status}"
+            f"{resp.headers.get('content-type')} status: {resp.status_code}"
         )
         return None
 
@@ -155,7 +166,7 @@ async def download_image(url: str, use_proxy: bool) -> bytes | None:
     if not _is_valid_image_response(url, content_type, content):
         logger.warning(
             f"Image [{url}] ignored due to invalid Content-Type: "
-            f"{content_type} status: {resp.status}"
+            f"{content_type} status: {resp.status_code}"
         )
         return None
 
@@ -243,6 +254,7 @@ async def get_rss_image(
             url=str(url),
             name=url.name or "image.png",
             missing_text=missing_image_msg,
+            failed=True,
         )
 
     if remaining_bytes is not None and len(content) > remaining_bytes:
@@ -251,6 +263,7 @@ async def get_rss_image(
             name=url.name or "image.png",
             missing_text=f"图片超过本轮下载预算，已跳过：{url}",
             bytes_used=len(content),
+            failed=True,
         )
 
     if save:
@@ -265,6 +278,7 @@ async def get_rss_image(
             url=str(url),
             name=url.name or "image.png",
             missing_text=missing_image_msg,
+            failed=True,
         )
 
     image_bytes = get_image_bytes(compressed_content)
@@ -273,6 +287,7 @@ async def get_rss_image(
             url=str(url),
             name=url.name or "image.png",
             missing_text=missing_image_msg,
+            failed=True,
         )
     return RssImage(
         raw=image_bytes,

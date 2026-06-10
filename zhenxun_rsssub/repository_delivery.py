@@ -100,6 +100,36 @@ async def delivered_target_keys(feed_name: str, entry_hash: str) -> set[tuple[st
     return result
 
 
+async def last_success_message_id(
+    feed_name: str, target_type: str, target_id: str
+) -> str | None:
+    logs = await RssDeliveryLog.filter(
+        feed_name=feed_name,
+        target_type=target_type,
+        target_id=target_id,
+        status="success",
+    ).exclude(message_id__isnull=True).order_by("-updated_at").all()
+    for log in logs:
+        if log.message_id:
+            return str(log.message_id)
+    return None
+
+
+async def success_message_ids(
+    feed_name: str, entry_hash: str
+) -> dict[tuple[str, str], str]:
+    logs = await RssDeliveryLog.filter(
+        feed_name=feed_name,
+        entry_hash=entry_hash,
+        status="success",
+    ).exclude(message_id__isnull=True).all()
+    result: dict[tuple[str, str], str] = {}
+    for log in logs:
+        if log.message_id:
+            result[(str(log.target_type), str(log.target_id))] = str(log.message_id)
+    return result
+
+
 async def delete_delivery_logs(feed_name: str) -> None:
     """删除投递日志"""
     await RssDeliveryLog.filter(feed_name=feed_name).delete()

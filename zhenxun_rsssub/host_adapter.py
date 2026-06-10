@@ -6,6 +6,7 @@ from typing import Literal
 import nonebot
 from nonebot import logger
 from nonebot.adapters.onebot.v11 import Bot
+from zhenxun.utils.platform import PlatformUtils
 
 RssSceneType = Literal["private", "group", "unknown"]
 _last_onebot_id: str | None = None
@@ -45,7 +46,6 @@ def remember_bot(bot: Bot) -> None:
 
 def resolve_onebot(bot_id: str | None = None) -> Bot | None:
     """Resolve a OneBot V11 bot without falling back to arbitrary adapters."""
-    candidates: list[Bot] = []
     if bot_id:
         try:
             bot = nonebot.get_bot(bot_id)
@@ -68,21 +68,12 @@ def resolve_onebot(bot_id: str | None = None) -> Bot | None:
             if isinstance(bot, Bot):
                 return bot
 
-    for bot in nonebot.get_bots().values():
-        if isinstance(bot, Bot):
-            candidates.append(bot)
-
-    if len(candidates) == 1:
-        return candidates[0]
-    if len(candidates) > 1:
-        logger.warning("Multiple OneBot bots online; RSS background job skipped")
-        return None
-    logger.warning("No OneBot bot online; RSS background job skipped")
-    return None
+    bot = PlatformUtils._resolve_unique_qq_client_bot("zhenxun_rsssub")
+    return bot if isinstance(bot, Bot) else None
 
 
 async def notify_superusers(bot: Bot | None, superusers: set[str], msg: str) -> None:
-    """Notify superusers through OneBot private messages."""
+    """Notify superusers through 真寻 platform utilities."""
     if bot is None:
         bot = resolve_onebot()
     if bot is None:
@@ -90,6 +81,6 @@ async def notify_superusers(bot: Bot | None, superusers: set[str], msg: str) -> 
         return
     for su in superusers:
         try:
-            await bot.send_private_msg(user_id=int(su), message=f"订阅姬: {msg}")
+            await PlatformUtils.send_superuser(bot, f"订阅姬: {msg}", su)
         except Exception as e:
             logger.error(f"Failed to notify RSS superuser {su}: {e}")

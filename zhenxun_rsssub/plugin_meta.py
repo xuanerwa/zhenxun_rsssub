@@ -1,9 +1,9 @@
-# ruff: noqa: E501
 from __future__ import annotations
 
 from nonebot.plugin import PluginMetadata
 
 from zhenxun.configs.utils import Command, Example, PluginExtraData, RegisterConfig
+from zhenxun.utils.enum import PluginType
 
 from .config import Config
 
@@ -31,6 +31,7 @@ USAGE = """
     黑名单=正则 或 黑名单=-1   设置/清空黑名单关键词
     cookie=xxx             设置抓取 Cookie
     合并=开/关           是否尝试合并转发
+    隐藏内容=显示/隐藏   是否显示 Telegram/RSS 隐藏内容
     暂停=开/关           暂停/恢复订阅
 
 示例：
@@ -40,6 +41,7 @@ USAGE = """
     订阅姬 拉取 真寻更新
     订阅姬 状态 真寻更新
     订阅姬 设置 真寻更新 频率=30 图片=5
+    订阅姬 设置 TG频道 隐藏内容=显示
     订阅姬 导出 真寻更新 file opml
     订阅姬 导入 --dry-run file:rss_export_all.json
 """.strip()
@@ -143,7 +145,7 @@ CONFIGS = [
         module="dingyueji",
         key="PROXY",
         value=None,
-        help="RSS 抓取和媒体下载使用的代理地址",
+        help="RSS 抓取使用的代理地址；媒体下载请使用 MEDIA_PROXY 或真寻全局 system_proxy",
         default_value=None,
         type=str,
     ),
@@ -197,10 +199,26 @@ CONFIGS = [
     ),
     RegisterConfig(
         module="dingyueji",
+        key="MEDIA_PROXY",
+        value=None,
+        help="RSS 媒体下载专用代理；为空时使用真寻全局 system_proxy",
+        default_value=None,
+        type=str,
+    ),
+    RegisterConfig(
+        module="dingyueji",
         key="MEDIA_DOWNLOAD_CONCURRENCY",
         value=4,
         help="媒体下载并发数",
         default_value=4,
+        type=int,
+    ),
+    RegisterConfig(
+        module="dingyueji",
+        key="MEDIA_DOWNLOAD_TIMEOUT_SECONDS",
+        value=8,
+        help="单张媒体下载和处理超时时间（秒）",
+        default_value=8,
         type=int,
     ),
     RegisterConfig(
@@ -225,6 +243,38 @@ CONFIGS = [
         value=20 * 1024 * 1024,
         help="单次更新允许下载的最大媒体总字节数",
         default_value=20 * 1024 * 1024,
+        type=int,
+    ),
+    RegisterConfig(
+        module="dingyueji",
+        key="MAX_MEDIA_ERRORS_PER_UPDATE",
+        value=3,
+        help="单轮更新允许的媒体下载失败次数，达到后跳过后续媒体；0 表示不限制",
+        default_value=3,
+        type=int,
+    ),
+    RegisterConfig(
+        module="dingyueji",
+        key="PUSH_ON_IMAGE_PARSE_FAILED",
+        value=False,
+        help="图片解析失败时是否仍然推送该条；关闭时等待下轮重试",
+        default_value=False,
+        type=bool,
+    ),
+    RegisterConfig(
+        module="dingyueji",
+        key="PUSH_WITH_LINK",
+        value=False,
+        help="推送正文中是否附带原文链接",
+        default_value=False,
+        type=bool,
+    ),
+    RegisterConfig(
+        module="dingyueji",
+        key="MESSAGE_SEND_TIMEOUT_SECONDS",
+        value=12,
+        help="单个目标消息发送超时时间（秒）",
+        default_value=12,
         type=int,
     ),
     RegisterConfig(
@@ -275,6 +325,14 @@ CONFIGS = [
         default_value=1,
         type=int,
     ),
+    RegisterConfig(
+        module="dingyueji",
+        key="SCHEDULER_UPDATE_TIMEOUT_SECONDS",
+        value=120,
+        help="单个订阅整轮更新超时时间（秒）",
+        default_value=120,
+        type=int,
+    ),
 ]
 
 __plugin_meta__ = PluginMetadata(
@@ -286,8 +344,10 @@ __plugin_meta__ = PluginMetadata(
     config=Config,
     supported_adapters={"~onebot.v11"},
     extra=PluginExtraData(
-        author="liuzhaoze / zhenxun",
+        author="xuanerwa",
         version="0.1.0",
+        plugin_type=PluginType.SUPER_AND_ADMIN,
+        admin_level=5,
         commands=COMMANDS,
         configs=CONFIGS,
         aliases={"RSS", "RSS订阅"},

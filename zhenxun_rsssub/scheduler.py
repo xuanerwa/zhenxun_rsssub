@@ -7,14 +7,15 @@ import re
 from urllib.parse import urlparse
 
 from nonebot import logger, require
+from nonebot_plugin_apscheduler import scheduler
 from yarl import URL
+
 from . import feed_state
 from .globals import plugin_config
 from .host_adapter import resolve_onebot
 from .rss import RSS
-from nonebot_plugin_apscheduler import scheduler
-require("nonebot_plugin_apscheduler")
 
+require("nonebot_plugin_apscheduler")
 
 
 BATCH_JOB_ID = "zhenxun_rsssub_batch_worker"
@@ -56,6 +57,12 @@ def _configured_batch_concurrency() -> int:
 
 def _configured_host_concurrency() -> int:
     return max(1, int(plugin_config.scheduler_per_host_concurrency or 1))
+
+
+def _configured_update_timeout_seconds() -> int:
+    return max(
+        1, int(getattr(plugin_config, "scheduler_update_timeout_seconds", 120) or 120)
+    )
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -162,9 +169,13 @@ async def check_rss_update(rss: RSS, *, force: bool = False):
     try:
         await asyncio.wait_for(
             rss.update(resolve_onebot(), force=force),
-            timeout=30,
+            timeout=_configured_update_timeout_seconds(),
         )
     except asyncio.TimeoutError:
+        logger.error(
+            f"{rss.name} RSS update timed out after "
+            f"{_configured_update_timeout_seconds()}s; last_metrics={rss.last_metrics or {}}"
+        )
         logger.error(f"{rss.name} 检查更新超时，结束此次任务!")
 
 
@@ -195,7 +206,7 @@ def ensure_batch_job() -> None:
     except Exception:
         # 如果获取任务失败，继续尝试添加
         pass
-    
+
     # 使用 scheduler.add_job 动态添加任务
     try:
         scheduler.add_job(

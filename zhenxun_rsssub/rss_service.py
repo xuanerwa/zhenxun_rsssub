@@ -41,6 +41,7 @@ async def update(rss, bot: Bot | None = None, *, force: bool = False):
 
 
 async def update_locked(rss, bot: Bot | None = None, *, force: bool = False):
+    update_started_at = time.monotonic()
     bot = bot or resolve_onebot()
     if bot is None:
         return
@@ -53,12 +54,24 @@ async def update_locked(rss, bot: Bot | None = None, *, force: bool = False):
         logger.info(f"{rss._log_prefix} feed timing deferred until {update_at}")
         return
 
+    subscribers_started_at = time.monotonic()
     await extract_valid_subscribers(rss, bot)
+    subscribers_duration_ms = (time.monotonic() - subscribers_started_at) * 1000
+    logger.debug(
+        f"{rss._log_prefix} subscriber validation completed "
+        f"in {subscribers_duration_ms:.0f} ms"
+    )
     if not any([rss.user_id, rss.group_id]):
         await stop_update_and_notify(rss, bot, reason="no valid subscription target")
         return
 
+    fetch_started_at = time.monotonic()
     result = await rss.fetch()
+    fetch_duration_ms = (time.monotonic() - fetch_started_at) * 1000
+    logger.debug(
+        f"{rss._log_prefix} fetch completed in {fetch_duration_ms:.0f} ms "
+        f"(status={result.status or 'unknown'}, cached={result.cached})"
+    )
     data = result.data
     initial_fetch = not await entries_file_exists(rss.name)
 
@@ -118,6 +131,7 @@ async def update_locked(rss, bot: Bot | None = None, *, force: bool = False):
 
     parse_started_at = time.monotonic()
     ctx = await RSSParser(rss=rss).parse(data)
+    total_duration_ms = (time.monotonic() - update_started_at) * 1000
     rss._record_metrics(
         result=result,
         parse_duration_ms=(time.monotonic() - parse_started_at) * 1000,
@@ -127,6 +141,12 @@ async def update_locked(rss, bot: Bot | None = None, *, force: bool = False):
         image_count=sum(len(message.images) for message in ctx.msg_contents.values()),
         messages_sent=ctx.messages_sent,
         error=None,
+    )
+    logger.info(
+        f"{rss._log_prefix} update completed in {total_duration_ms:.0f} ms "
+        f"(subscribers={subscribers_duration_ms:.0f} ms, "
+        f"fetch={fetch_duration_ms:.0f} ms, "
+        f"parse_send={time.monotonic() - parse_started_at:.2f}s)"
     )
 
 

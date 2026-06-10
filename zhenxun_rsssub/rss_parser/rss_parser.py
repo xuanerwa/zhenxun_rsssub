@@ -1,6 +1,9 @@
 from collections.abc import Awaitable, Callable
 import re
+import time
 from typing import TYPE_CHECKING, Any, ClassVar
+
+from nonebot import logger
 
 if TYPE_CHECKING:
     from ..rss import RSS
@@ -117,9 +120,14 @@ class RSSParser:
         )
 
     async def parse(self, data: dict[str, Any], *, dry_run: bool = False) -> Context:
+        parse_started_at = time.monotonic()
         title = data["feed"]["title"]
         entries = data["entries"]
         saved_entries = await load_entries(self.rss.name)
+        logger.debug(
+            f"[{self.rss.name}] parse start: entries={len(entries)}, "
+            f"saved_entries={len(saved_entries)}, dry_run={dry_run}"
+        )
 
         # 初始化上下文对象
         self.context.title = title
@@ -147,23 +155,52 @@ class RSSParser:
         self.context.dry_run = dry_run
 
         # RSS 解析预处理
+        preprocess_started_at = time.monotonic()
         await self._preprocess()
+        logger.debug(
+            f"[{self.rss.name}] preprocess completed in "
+            f"{(time.monotonic() - preprocess_started_at) * 1000:.0f} ms; "
+            f"new_entries={len(self.context.new_entries)}"
+        )
 
         if not self.context.new_entries:
             # 没有新增的 RSS 文章
             # RSS 解析后处理
+            postprocess_started_at = time.monotonic()
             await self._postprocess()
+            logger.debug(
+                f"[{self.rss.name}] postprocess without new entries completed in "
+                f"{(time.monotonic() - postprocess_started_at) * 1000:.0f} ms"
+            )
             return self.context
 
         # 为避免发送消息过于频繁，每 5 条更新发送一次消息
-        for chunk in chunk_list(self.context.new_entries, 5):
+        for chunk_index, chunk in enumerate(chunk_list(self.context.new_entries, 5), 1):
+            chunk_started_at = time.monotonic()
+            logger.debug(
+                f"[{self.rss.name}] processing chunk {chunk_index}: "
+                f"{len(chunk)} entries"
+            )
             for entry in chunk:
                 self.context.entry = entry
                 await self._process()
                 self.context.flush_msg_buffer()
+            postprocess_started_at = time.monotonic()
             await self._postprocess()
+            logger.debug(
+                f"[{self.rss.name}] chunk {chunk_index} postprocess completed in "
+                f"{(time.monotonic() - postprocess_started_at) * 1000:.0f} ms"
+            )
             if not dry_run:
                 self.context.flush_msg_contents()
+            logger.debug(
+                f"[{self.rss.name}] chunk {chunk_index} completed in "
+                f"{(time.monotonic() - chunk_started_at) * 1000:.0f} ms"
+            )
+        logger.debug(
+            f"[{self.rss.name}] parse completed in "
+            f"{(time.monotonic() - parse_started_at) * 1000:.0f} ms"
+        )
         return self.context
 
     async def _preprocess(self):

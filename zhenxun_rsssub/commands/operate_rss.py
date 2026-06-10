@@ -13,7 +13,12 @@ from ..opml import export_opml, import_opml, looks_like_opml
 from ..rss import RSS
 from ..scheduler import create_rss_update_job
 from . import rss_cmd
-from .tools import find_visible_rss, visible_rss_list
+from .tools import (
+    find_target_rss,
+    option_group_id,
+    resolve_command_target,
+    target_rss_list,
+)
 
 EXPORT_SCHEMA_VERSION = 2
 SENSITIVE_KEYS = {"cookie"}
@@ -153,8 +158,12 @@ def _attach_current_target(event: object, record: dict[str, Any]) -> dict[str, A
 
 
 @rss_cmd.assign("测试")
-async def test_rss(event, name: str):
-    rss = await find_visible_rss(event, name)
+async def test_rss(bot, event, result: Arparma, name: str):
+    group_id = option_group_id(result, "测试")
+    target = await resolve_command_target(bot, event, group_id)
+    if target is None:
+        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    rss = await find_target_rss(target, name)
     if rss is None:
         await rss_cmd.finish("❌ 找不到该订阅")
 
@@ -163,8 +172,12 @@ async def test_rss(event, name: str):
 
 
 @rss_cmd.assign("拉取")
-async def pull_rss(event, name: str):
-    rss = await find_visible_rss(event, name)
+async def pull_rss(bot, event, result: Arparma, name: str):
+    group_id = option_group_id(result, "拉取")
+    target = await resolve_command_target(bot, event, group_id)
+    if target is None:
+        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    rss = await find_target_rss(target, name)
     if rss is None:
         await rss_cmd.finish("❌ 找不到该订阅")
 
@@ -185,8 +198,17 @@ async def pull_rss(event, name: str):
 
 
 @rss_cmd.assign("状态")
-async def rss_status(event, name: str | None = None):
-    rss_list = await visible_rss_list(event)
+async def rss_status(
+    bot,
+    event,
+    result: Arparma,
+    name: str | None = None,
+):
+    group_id = option_group_id(result, "状态")
+    target = await resolve_command_target(bot, event, group_id)
+    if target is None:
+        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    rss_list = await target_rss_list(target)
     if name:
         rss_list = [rss for rss in rss_list if rss.name == name]
     if not rss_list:
@@ -216,14 +238,23 @@ async def rss_status(event, name: str | None = None):
 
 
 @rss_cmd.assign("导出")
-async def export_rss(event, name: str | None = None, result: Arparma | None = None):
+async def export_rss(
+    bot,
+    event,
+    result: Arparma,
+    name: str | None = None,
+):
+    group_id = option_group_id(result, "导出")
     raw_args = result.all_matched_args if result else {}
     options_set = set(raw_args.get("options") or ())
     as_file = "file" in options_set or "文件" in options_set
     as_opml = "opml" in options_set or "OPML" in options_set
     raw_export = "raw" in options_set or "原始" in options_set
     mask_sensitive = plugin_config.export_mask_sensitive and not raw_export
-    rss_list = await visible_rss_list(event)
+    target = await resolve_command_target(bot, event, group_id)
+    if target is None:
+        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    rss_list = await target_rss_list(target)
     if name:
         rss_list = [rss for rss in rss_list if rss.name == name]
     if not rss_list:

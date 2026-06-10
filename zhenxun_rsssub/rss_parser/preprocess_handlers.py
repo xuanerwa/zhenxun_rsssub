@@ -17,8 +17,22 @@ from ..utils import get_entry_datetime, get_entry_hash
 from . import rss_entries_file_operations as FileIO
 from .cache_db_manager import initialize_cache_db, is_entry_duplicated
 from .context import Context
+from .hidden_content import has_spoiler_text, is_hidden_tag
+from .html_document_processor import _soup
 from .rss_parser import ParsingHandlerManager
 from .utils import get_summary
+
+
+def _entry_has_only_hidden_content(summary: str) -> bool:
+    soup = _soup(summary)
+    if has_spoiler_text(summary):
+        return True
+    if not any(is_hidden_tag(tag) for tag in soup.find_all(True)):
+        return False
+    for tag in list(soup.find_all(True)):
+        if is_hidden_tag(tag):
+            tag.decompose()
+    return not soup.get_text(strip=True) and not soup.find_all(["img", "video"])
 
 
 @ParsingHandlerManager.preprocess_handler(priority=20)
@@ -43,8 +57,12 @@ async def filter_invalid_entries(ctx: Context, rss: "RSS"):
         should_remove = False
         reason = ""
 
+        # 检查是否为隐藏内容
+        if not rss.show_hidden_content and _entry_has_only_hidden_content(summary):
+            should_remove = True
+            reason = "检测到隐藏内容，已取消发送"
         # 检查是否包含屏蔽词
-        if plugin_config.black_words and re.findall(
+        elif plugin_config.black_words and re.findall(
             "|".join(plugin_config.black_words), summary
         ):
             should_remove = True

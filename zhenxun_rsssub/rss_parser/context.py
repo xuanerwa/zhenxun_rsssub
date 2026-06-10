@@ -6,6 +6,7 @@ from typing import Any
 from nonebot import logger
 
 from ..delivery import DeliveryTarget
+from ..globals import plugin_config
 from ..rss_message import RssImage, RssMessage
 
 
@@ -35,11 +36,13 @@ class Context:
     msg_title: str = ""
     # 新增的 RSS 文章对应的解析结果
     msg_contents: dict[str, RssMessage] = field(default_factory=dict)
+    skipped_entry_hashes: set[str] = field(default_factory=set)
     # 暂存单条 RSS 文章的解析结果
     msg_text_buffer: str = ""
     msg_image_buffer: list[RssImage] = field(default_factory=list)
     # 单轮 RSS 更新中的媒体下载预算，避免图片过多时内存和网络峰值过高
     media_bytes_used: int = 0
+    media_error_count: int = 0
 
     # 当前正在解析的文章
     entry: dict[str, Any] | None = None
@@ -57,6 +60,18 @@ class Context:
         """保存解析结果并清空缓冲区，为下次解析准备"""
         entry_hash = self.entry["hash"]  # 预处理第 1 步计算得到
         message = RssMessage(text=self.msg_text_buffer, images=self.msg_image_buffer)
+        if (
+            not plugin_config.push_on_image_parse_failed
+            and any(image.failed for image in self.msg_image_buffer)
+        ):
+            logger.warning(
+                f"[{self.rss_name}] 图片解析失败，已跳过本条推送，等待下轮重试: {entry_hash}"
+            )
+            self.skipped_entry_hashes.add(entry_hash)
+            self.msg_text_buffer = ""
+            self.msg_image_buffer = []
+            self.continue_process = True
+            return
         if message.is_empty():
             logger.warning("对空缓冲区进行了刷新，该条 RSS 文章未被正确解析")
             return

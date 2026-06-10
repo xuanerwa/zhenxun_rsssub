@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 import re
@@ -33,33 +34,79 @@ def _remaining_media_bytes(ctx: Context) -> int | None:
     return max(0, limit - ctx.media_bytes_used)
 
 
-async def _append_rss_image(
+def _media_timeout_seconds() -> int:
+    value = getattr(plugin_config, "media_download_timeout_seconds", 8)
+    return max(1, int(value or 8))
+
+
+def _max_media_errors_per_update() -> int:
+    value = getattr(plugin_config, "max_media_errors_per_update", 3)
+    return max(0, int(value or 0))
+
+
+def _missing_image(url: URL, text: str) -> RssImage:
+    return RssImage(
+        url=str(url),
+        name=url.name or "image.png",
+        missing_text=text,
+        failed=True,
+    )
+
+
+async def _fetch_rss_image(
     ctx: Context, rss: "RSS", url: URL, content: bytes | None = None
-):
+) -> RssImage:
+    max_errors = _max_media_errors_per_update()
+    if max_errors and ctx.media_error_count >= max_errors:
+        return _missing_image(url, f"本轮媒体下载失败过多，已跳过：{url}")
+
     remaining_bytes = _remaining_media_bytes(ctx)
     if remaining_bytes is not None and remaining_bytes <= 0:
-        ctx.msg_image_buffer.append(
-            RssImage(
-                url=str(url),
-                name=url.name or "image.png",
-                missing_text=f"media download budget exhausted, skipped: {url}",
-            )
-        )
-        return
+        return _missing_image(url, f"媒体下载预算已用尽，已跳过：{url}")
 
-    image = await get_rss_image(
-        url,
-        rss.use_proxy,
-        rss.download_pic,
-        rss.sanitized_name,
-        content,
-        remaining_bytes=remaining_bytes,
-    )
+    timeout = _media_timeout_seconds()
+    try:
+        logger.debug(f"[{rss.name}] 开始处理图片: {url}")
+        image = await asyncio.wait_for(
+            get_rss_image(
+                url,
+                rss.use_proxy,
+                rss.download_pic,
+                rss.sanitized_name,
+                content,
+                remaining_bytes=remaining_bytes,
+            ),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        ctx.media_error_count += 1
+        logger.warning(f"[{rss.name}] 图片处理超时，已跳过: {url}")
+        return _missing_image(url, f"图片处理超时，已跳过：{url}")
+    except Exception as e:
+        ctx.media_error_count += 1
+        logger.warning(f"[{rss.name}] 图片处理失败，已跳过: {url} ({e})")
+        return _missing_image(url, f"图片处理失败，已跳过：{url}")
     if image.bytes_used:
         ctx.media_bytes_used += image.bytes_used
     elif image.raw:
         ctx.media_bytes_used += len(image.raw)
-    ctx.msg_image_buffer.append(image)
+    logger.debug(f"[{rss.name}] 图片处理完成: {url}")
+    return image
+
+
+async def _append_rss_image(
+    ctx: Context, rss: "RSS", url: URL, content: bytes | None = None
+):
+    ctx.msg_image_buffer.append(await _fetch_rss_image(ctx, rss, url, content))
+
+
+async def _append_rss_images(ctx: Context, rss: "RSS", urls: list[str]) -> None:
+    if not urls:
+        return
+    images = await asyncio.gather(
+        *(_fetch_rss_image(ctx, rss, URL(url)) for url in urls)
+    )
+    ctx.msg_image_buffer.extend(images)
 
 
 @ParsingHandlerManager.process_handler(priority=0)
@@ -92,7 +139,9 @@ async def handle_entry_title(ctx: Context, rss: "RSS"):
     # 判断标题与正文的相似度，避免标题正文一样，或者标题为正文前缀等情况
     try:
         summary_text = html_text(
-            get_summary(entry), remove_blockquote=not plugin_config.blockquote
+            get_summary(entry),
+            remove_blockquote=not plugin_config.blockquote,
+            show_hidden_content=rss.show_hidden_content,
         )
         similarity = SequenceMatcher(
             None, summary_text[: len(entry_title)], entry_title
@@ -129,21 +178,23 @@ async def handle_images(ctx: Context, rss: "RSS"):
         return
 
     summary = get_summary(entry)
-    entry_images = extract_image_urls(summary)
+    entry_images = extract_image_urls(
+        summary, show_hidden_content=rss.show_hidden_content
+    )
     if 0 < rss.max_image_number < len(entry_images):
         ctx.msg_text_buffer += (
             f"图片数量限制已启用，仅显示 {rss.max_image_number} 张图片\n"
         )
         entry_images = entry_images[: rss.max_image_number]
-    for url in entry_images:
-        await _append_rss_image(ctx, rss, URL(url))
+    await _append_rss_images(ctx, rss, entry_images)
 
     # 处理视频
-    video_posters = extract_video_poster_urls(summary)
+    video_posters = extract_video_poster_urls(
+        summary, show_hidden_content=rss.show_hidden_content
+    )
     if video_posters:
         ctx.msg_text_buffer += "\n视频封面："
-        for url in video_posters:
-            await _append_rss_image(ctx, rss, URL(url))
+        await _append_rss_images(ctx, rss, video_posters)
 
 
 @ParsingHandlerManager.process_handler(priority=49)
@@ -159,7 +210,9 @@ async def handle_summary(ctx: Context, rss: "RSS"):
     entry = ctx.entry
 
     try:
-        article = handle_html_tags(get_summary(entry))
+        article = handle_html_tags(
+            get_summary(entry), show_hidden_content=rss.show_hidden_content
+        )
     except Exception as e:
         logger.warning(f"[{rss.name}]处理正文时出错: {e}")
 
@@ -184,6 +237,8 @@ async def remove_unwanted_content(ctx: Context, rss: "RSS"):
 @ParsingHandlerManager.process_handler(priority=70)
 async def note_link(ctx: Context, rss: "RSS"):
     """添加文章链接"""
+    if not plugin_config.push_with_link:
+        return
     ctx.msg_text_buffer += f"\n\n链接：{ctx.entry.get('link', '无链接')}"
 
 

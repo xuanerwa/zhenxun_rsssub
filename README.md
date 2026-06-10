@@ -84,17 +84,6 @@
 
 ---
 
-#### 方法二：使用 nb-cli 安装（如果支持）
-
-如果你的真寻机器人版本支持 nb-cli 插件安装：
-
-```bash
-cd /path/to/zhenxun_bot
-nb plugin install zhenxun_rsssub
-```
-
-然后按照上述步骤 3-5 完成依赖安装和配置。
-
 ## ⚙️ 配置说明
 
 ### 通过 WebUI 配置（推荐）
@@ -126,9 +115,16 @@ dingyueji:
   MAX_LENGTH: 500                 # 单条文本推送最大长度
   RSS_ENTRIES_FILE_LIMIT: 200     # RSS 条目文件保存数量限制
   EXPORT_MASK_SENSITIVE: true     # 导出时脱敏敏感字段
+  MEDIA_PROXY: null                # 媒体下载专用代理；为空时使用真寻全局 system_proxy
+  MEDIA_DOWNLOAD_TIMEOUT_SECONDS: 8 # 单张媒体下载和处理超时时间（秒）
+  MAX_MEDIA_ERRORS_PER_UPDATE: 3    # 单次更新允许的媒体下载失败次数，0 表示不限制
+  PUSH_ON_IMAGE_PARSE_FAILED: false # 图片解析失败时是否仍然推送该条
+  PUSH_WITH_LINK: false            # 推送正文中是否附带原文链接
+  MESSAGE_SEND_TIMEOUT_SECONDS: 12 # 单个目标消息发送超时时间（秒）
   SCHEDULER_BATCH_INTERVAL_SECONDS: 60   # 调度器批次间隔（秒）
   SCHEDULER_BATCH_CONCURRENCY: 4         # 调度器批次并发数
   SCHEDULER_PER_HOST_CONCURRENCY: 1      # 每个主机并发数
+  SCHEDULER_UPDATE_TIMEOUT_SECONDS: 120  # 单个订阅整轮更新超时时间（秒）
 ```
 
 ### 翻译 API 配置（可选）
@@ -200,6 +196,14 @@ BAIDU_TRANSLATE_KEY="your_baidu_key"
 
 **说明：** 支持批量删除多个订阅
 
+#### 彻底删除订阅（仅超级用户）
+
+```text
+订阅姬 彻底删除 <订阅名> [订阅名 ...]
+```
+
+**说明：** 只有超级用户可以执行该命令，执行后会删除订阅及其全部状态数据。
+
 ---
 
 #### 查看订阅列表
@@ -255,6 +259,7 @@ BAIDU_TRANSLATE_KEY="your_baidu_key"
 | 黑名单 | 正则表达式 或 -1 | 设置黑名单关键词（支持正则），-1 清空 |
 | cookie | 字符串 | 设置抓取 Cookie |
 | 合并 | 开/关 | 是否尝试合并转发 |
+| 隐藏内容 | 显示/隐藏 | 是否显示 Telegram/RSS 隐藏内容 |
 | 暂停 | 开/关 | 暂停/恢复订阅 |
 
 ---
@@ -379,6 +384,7 @@ BAIDU_TRANSLATE_KEY="your_baidu_key"
 
 ```text
 订阅姬 设置 真寻更新 频率=30 图片=5 代理=开 下载图片=关
+订阅姬 设置 TG频道 隐藏内容=显示
 ```
 
 #### 使用正则表达式过滤

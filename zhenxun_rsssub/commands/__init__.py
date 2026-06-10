@@ -1,14 +1,14 @@
 from nonebot import require
-from nonebot.adapters.onebot.v11.permission import GROUP_ADMIN, GROUP_OWNER
-from nonebot.permission import SUPERUSER
 
 require("nonebot_plugin_alconna")
 from nonebot_plugin_alconna import on_alconna
 
+from zhenxun.utils.rules import admin_check
+
 from .cmd_parser import alconna
 
 # 使用命令解析器 Alconna 注册事件响应器
-rss_cmd = on_alconna(alconna, permission=GROUP_OWNER | GROUP_ADMIN | SUPERUSER)
+rss_cmd = on_alconna(alconna, rule=admin_check(5), priority=5, block=True)
 
 # 注册事件处理函数
 from . import add_rss as add_rss

@@ -9,9 +9,9 @@ from typing import Literal
 import feedparser
 from nonebot import logger
 from yarl import URL
+from zhenxun.utils.http_utils import AsyncHttpx
 
 from .globals import plugin_config
-from .http_client import get_proxy, get_text_response
 from .fetch_models import FetchResult, compact_error
 
 HEADERS = {
@@ -32,9 +32,8 @@ ACCEPT_FETCH_STATUS_CODES = (304, *range(400, 600))
 async def fetch(rss) -> FetchResult:
     """Fetch RSS content."""
     url = URL(rss.get_url())
-    localhost = {"127.0.0.1", "localhost"}
-    proxy = get_proxy(rss.use_proxy) if url.host not in localhost else None
-    result = await fetch_url(rss, url, proxy=proxy, source="primary")
+    request_proxy = get_request_proxy(rss.use_proxy, url)
+    result = await fetch_url(rss, url, request_proxy=request_proxy, source="primary")
     if result.ok or result.cached:
         record_fetch_result(rss, result)
         return result
@@ -44,7 +43,7 @@ async def fetch(rss) -> FetchResult:
             f"{rss._log_prefix} failed to access {url}: {result.error}, "
             "trying fallback RSSHub endpoints"
         )
-        result = await fetch_fallback(rss, proxy, previous=result)
+        result = await fetch_fallback(rss, request_proxy, previous=result)
     else:
         logger.error(f"{rss._log_prefix} failed to access {url}: {result.error}")
 
@@ -95,11 +94,26 @@ def record_fetch_result(rss, result: FetchResult) -> None:
         logger.warning(f"{rss._log_prefix} feedparser bozo: {result.bozo_exception}")
 
 
+def get_request_proxy(use_proxy: bool, url: URL) -> str | bool | None:
+    """Return proxy config for AsyncHttpx.
+
+    ``None`` means use 真寻全局 HTTP 客户端配置；``False`` means explicitly
+    disable proxy for this request.
+    """
+    if url.host in {"127.0.0.1", "localhost"}:
+        return False
+    if not use_proxy:
+        return False
+    if plugin_config.proxy:
+        return str(plugin_config.proxy)
+    return None
+
+
 async def fetch_url(
     rss,
     url: URL,
     *,
-    proxy: str | None,
+    request_proxy: str | bool | None,
     source: Literal["primary", "fallback"],
 ) -> FetchResult:
     started_at = time.monotonic()
@@ -111,37 +125,41 @@ async def fetch_url(
         headers.update(get_cached_headers(rss, str(url)))
 
     try:
-        resp = await get_text_response(
-            str(url),
-            headers=headers,
-            proxy=proxy,
-            timeout=10,
-            accept_status_codes=ACCEPT_FETCH_STATUS_CODES,
-        )
+        request_kwargs = {
+            "headers": headers,
+            "timeout": 10,
+            "accept_status_codes": ACCEPT_FETCH_STATUS_CODES,
+        }
+        if isinstance(request_proxy, str):
+            request_kwargs["proxy"] = request_proxy
+        elif request_proxy is False:
+            request_kwargs["use_proxy"] = False
+        resp = await AsyncHttpx.get(str(url), **request_kwargs)
         elapsed_ms = (time.monotonic() - started_at) * 1000
-        content_length = content_length_from_response(resp.headers, resp.content)
+        headers = normalize_headers(resp.headers)
+        content_length = content_length_from_response(headers, resp.content)
         result = FetchResult(
             ok=False,
-            status=resp.status,
+            status=resp.status_code,
             url=str(url),
             source=source,
-            headers=resp.headers,
+            headers=headers,
             elapsed_ms=elapsed_ms,
             content_length=content_length,
-            retry_after=parse_retry_after(resp.headers),
+            retry_after=parse_retry_after(headers),
         )
-        if resp.status == 304 or (
-            resp.status == 200 and int(resp.headers.get("content-length", "1")) == 0
+        if resp.status_code == 304 or (
+            resp.status_code == 200 and int(headers.get("content-length", "1")) == 0
         ):
             result.ok = True
             result.cached = True
             return result
 
-        if resp.status < 200 or resp.status >= 300:
-            result.error = http_error(resp.status, resp.text)
+        if resp.status_code < 200 or resp.status_code >= 300:
+            result.error = http_error(resp.status_code, resp.text)
             return result
 
-        update_http_cache(rss, str(url), resp.headers)
+        update_http_cache(rss, str(url), headers)
         data = feedparser.parse(resp.text)
         bozo_exception = data.get("bozo_exception")
         result.data = data
@@ -164,7 +182,7 @@ async def fetch_url(
 
 
 async def fetch_fallback(
-    rss, proxy: str | None, *, previous: FetchResult | None = None
+    rss, request_proxy: str | bool | None, *, previous: FetchResult | None = None
 ) -> FetchResult:
     """Fetch RSS content from fallback RSSHub endpoints."""
     results: list[FetchResult] = []
@@ -172,7 +190,12 @@ async def fetch_fallback(
         results.append(previous)
     for fallback_url in plugin_config.rsshub_fallback_urls:
         url = URL(rss.get_url(fallback_url))
-        result = await fetch_url(rss, url, proxy=proxy, source="fallback")
+        fallback_proxy = False if request_proxy is False else get_request_proxy(
+            rss.use_proxy, url
+        )
+        result = await fetch_url(
+            rss, url, request_proxy=fallback_proxy, source="fallback"
+        )
         if result.ok or result.cached:
             return result
         logger.error(f"{rss._log_prefix} failed to access {url}: {result.error}")
@@ -193,6 +216,10 @@ async def fetch_fallback(
         errors.append(f"{item.source} {item.url}: {error}")
     latest.error = compact_error("; ".join(errors), 600)
     return latest
+
+
+def normalize_headers(headers) -> dict[str, str]:
+    return {str(k).lower(): str(v) for k, v in headers.items()}
 
 
 def content_length_from_response(headers: dict[str, str], content: bytes) -> int:

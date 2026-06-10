@@ -62,6 +62,15 @@ async def load_entries(name: str) -> list[dict[str, Any]]:
     return [entry.data for entry in entries if entry.data]
 
 
+async def find_entry_by_link(name: str, link: str) -> dict[str, Any] | None:
+    entries = await RssEntry.filter(feed_name=name).all()
+    for entry in entries:
+        data = entry.data or {}
+        if data.get("link") == link:
+            return data
+    return None
+
+
 async def initialize_entries(name: str, entries: Iterable[dict[str, Any]]) -> None:
     """初始化文章条目"""
     entries_list = list(entries)

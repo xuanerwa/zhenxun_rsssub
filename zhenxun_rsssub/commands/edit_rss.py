@@ -2,6 +2,7 @@ from copy import deepcopy
 import asyncio
 import re
 
+from nonebot_plugin_alconna import Arparma
 from yarl import URL
 
 from ..host_adapter import get_event_target, is_group_event
@@ -9,6 +10,7 @@ from ..repository_entries import rename_entries_file
 from ..rss import RSS
 from ..scheduler import create_rss_update_job, remove_rss_update_job
 from . import rss_cmd
+from .tools import option_group_id, resolve_command_target
 
 
 async def handle_edit_name(rss: RSS, value: str, event=None):
@@ -135,6 +137,10 @@ def handle_edit_send_merge_msg(rss: RSS, value: str, event=None):
     rss.send_merged_msg = bool(int(value))
 
 
+def handle_edit_show_hidden_content(rss: RSS, value: str, event=None):
+    rss.show_hidden_content = bool(int(value))
+
+
 def handle_edit_stop(rss: RSS, value: str, event=None):
     rss.stop = bool(int(value))
 
@@ -156,6 +162,7 @@ EDIT_HANDLERS = {
     "image": handle_edit_max_image_number,
     "hexie": handle_exit_content_to_remove,
     "merge": handle_edit_send_merge_msg,
+    "hidden": handle_edit_show_hidden_content,
     "stop": handle_edit_stop,
 }
 
@@ -182,6 +189,9 @@ EDIT_KEY_ALIASES = {
     "河蟹": "hexie",
     "过滤": "hexie",
     "合并": "merge",
+    "隐藏内容": "hidden",
+    "隐藏": "hidden",
+    "剧透": "hidden",
     "暂停": "stop",
     "停止": "stop",
 }
@@ -194,6 +204,9 @@ BOOL_VALUE_ALIASES = {
     "真": "1",
     "true": "1",
     "on": "1",
+    "显示": "1",
+    "展示": "1",
+    "全部显示": "1",
     "关": "0",
     "关闭": "0",
     "禁用": "0",
@@ -201,9 +214,11 @@ BOOL_VALUE_ALIASES = {
     "假": "0",
     "false": "0",
     "off": "0",
+    "隐藏": "0",
+    "不显示": "0",
 }
 
-BOOL_KEYS = {"proxy", "ot", "op", "dp", "merge", "stop"}
+BOOL_KEYS = {"proxy", "ot", "op", "dp", "merge", "hidden", "stop"}
 
 EDIT_HELP = {
     "名称": "名称=新订阅名",
@@ -220,6 +235,7 @@ EDIT_HELP = {
     "图片": "图片=0 或 图片=5",
     "河蟹": "河蟹=+正则 或 河蟹=-正则",
     "合并": "合并=开/关",
+    "隐藏内容": "隐藏内容=显示/隐藏",
     "暂停": "暂停=开/关",
 }
 
@@ -250,9 +266,13 @@ def parse_edit_option(option: str) -> tuple[str, str]:
 
 
 @rss_cmd.assign("设置")
-async def edit_rss(event, name: str, options: list[str]):
+async def edit_rss(bot, event, result: Arparma, name: str, options: list[str]):
+    group_id = option_group_id(result, "设置")
     rss = await RSS.get_by_name(name)
-    target = get_event_target(event)
+    target = await resolve_command_target(bot, event, group_id)
+    if target is None:
+        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+
     missing = not rss
     if rss and target.scene_type == "private":
         missing = target.user_id not in rss.user_id

@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup, FeatureNotFound
 from yarl import URL
 
 from ..globals import plugin_config
+from .hidden_content import remove_hidden_content
 
 
 def _soup(html: object) -> BeautifulSoup:
@@ -32,6 +33,41 @@ def _replace_links(soup: BeautifulSoup) -> None:
         href = a.get("href") or ""
         text = a.get_text(strip=True)
         a.replace_with(_normalize_weibo_link(text, href))
+
+
+def _remove_reference_link_blocks(soup: BeautifulSoup) -> None:
+    if plugin_config.push_with_link:
+        return
+    for tag in soup.find_all(["p", "div", "blockquote"]):
+        if not tag.find_parent(class_=re.compile(r"rsshub-quote", re.I)):
+            continue
+        anchors = tag.find_all("a")
+        if len(anchors) != 1:
+            continue
+        href = anchors[0].get("href") or ""
+        if "t.me/" not in href:
+            continue
+        text = tag.get_text(" ", strip=True)
+        anchor_text = anchors[0].get_text(" ", strip=True)
+        if not text or not anchor_text:
+            continue
+        normalized = re.sub(r"[\s:：·•|/\\\-_,.。!！?？\[\]（）()]+", "", text)
+        normalized_anchor = re.sub(
+            r"[\s:：·•|/\\\-_,.。!！?？\[\]（）()]+", "", anchor_text
+        )
+        if normalized == normalized_anchor or normalized.startswith(normalized_anchor):
+            tag.decompose()
+
+
+def extract_reference_links(html: str) -> list[str]:
+    soup = _soup(html)
+    links: list[str] = []
+    for quote in soup.find_all(class_=re.compile(r"rsshub-quote", re.I)):
+        for anchor in quote.find_all("a"):
+            href = anchor.get("href") or ""
+            if "t.me/" in href:
+                links.append(href)
+    return links
 
 
 def _format_lists(soup: BeautifulSoup) -> None:
@@ -77,29 +113,42 @@ def _clean_text(text: str) -> str:
     return text
 
 
-def handle_html_tags(html: object) -> str:
+def handle_html_tags(html: object, *, show_hidden_content: bool = False) -> str:
     soup = _soup(html)
+    if not show_hidden_content:
+        remove_hidden_content(soup)
     _remove_ignored_tags(soup)
+    _remove_reference_link_blocks(soup)
     _replace_links(soup)
     _format_lists(soup)
     _insert_block_breaks(soup)
     return _clean_text(soup.get_text())
 
 
-def extract_image_urls(html: str) -> list[str]:
+def extract_image_urls(html: str, *, show_hidden_content: bool = False) -> list[str]:
     soup = _soup(html)
+    if not show_hidden_content:
+        remove_hidden_content(soup)
     return [src for img in soup.find_all("img") if (src := img.get("src"))]
 
 
-def extract_video_poster_urls(html: str) -> list[str]:
+def extract_video_poster_urls(
+    html: str, *, show_hidden_content: bool = False
+) -> list[str]:
     soup = _soup(html)
+    if not show_hidden_content:
+        remove_hidden_content(soup)
     return [
         poster for video in soup.find_all("video") if (poster := video.get("poster"))
     ]
 
 
-def html_text(html: str, *, remove_blockquote: bool = False) -> str:
+def html_text(
+    html: str, *, remove_blockquote: bool = False, show_hidden_content: bool = False
+) -> str:
     soup = _soup(html)
+    if not show_hidden_content:
+        remove_hidden_content(soup)
     if remove_blockquote:
         for tag in soup.find_all("blockquote"):
             tag.decompose()

@@ -8,12 +8,20 @@ from nonebot import logger
 if TYPE_CHECKING:
     from ..rss import RSS
 
-from ..repository_delivery import delivered_target_keys, upsert_delivery_logs
+from ..repository_delivery import (
+    delivered_target_keys,
+    success_message_ids,
+    upsert_delivery_logs,
+)
+from ..repository_entries import find_entry_by_link
 from ..rss_message import with_title
+from ..utils import get_entry_hash
 from . import rss_entries_file_operations as FileIO
 from .context import Context
+from .html_document_processor import extract_reference_links
 from .message_sender import send_message
 from .rss_parser import ParsingHandlerManager
+from .utils import get_summary
 
 TargetKey = tuple[str, str]
 
@@ -65,6 +73,27 @@ async def _write_entry_delivery_state(ctx: Context, rss: "RSS", entry: dict) -> 
     return fully_delivered
 
 
+async def _reply_targets_for_entry(
+    ctx: Context, rss: "RSS", entry: dict, missing_targets: set[TargetKey]
+) -> dict[tuple[str, int], str]:
+    reply_to: dict[tuple[str, int], str] = {}
+    for link in extract_reference_links(get_summary(entry)):
+        reference_entry = next(
+            (candidate for candidate in ctx.entries if candidate.get("link") == link),
+            None,
+        )
+        if reference_entry is None:
+            reference_entry = await find_entry_by_link(rss.name, link)
+        if reference_entry is None:
+            continue
+        reference_hash = reference_entry.get("hash") or get_entry_hash(reference_entry)
+        message_ids = await success_message_ids(rss.name, reference_hash)
+        for target_type, target_id in missing_targets:
+            if message_id := message_ids.get((target_type, target_id)):
+                reply_to[(target_type, int(target_id))] = message_id
+    return reply_to
+
+
 @ParsingHandlerManager.postprocess_handler()
 async def send_messages(ctx: Context, rss: "RSS"):
     started_at = time.monotonic()
@@ -85,9 +114,11 @@ async def send_messages(ctx: Context, rss: "RSS"):
         success_targets = _success_target_keys(results)
         any_success = bool(success_targets)
         if any_success:
-            ctx.messages_sent += len(success_targets) * len(ctx.new_entries)
+            ctx.messages_sent += len(success_targets) * len(ctx.msg_contents)
             for entry in ctx.new_entries:
                 entry_hash = entry["hash"]
+                if entry_hash in ctx.skipped_entry_hashes:
+                    continue
                 await _record_delivery_results(rss, entry_hash, results)
                 fully_delivered = await _write_entry_delivery_state(ctx, rss, entry)
                 if not fully_delivered:
@@ -107,7 +138,20 @@ async def send_messages(ctx: Context, rss: "RSS"):
             delivered = await delivered_target_keys(rss.name, entry_hash)
             missing_targets = ctx.target_keys - delivered
             user_ids, group_ids = _split_target_keys(missing_targets)
-            results = await send_message(user_ids, group_ids, msg_to_send)
+            reply_to = await _reply_targets_for_entry(
+                ctx, rss, entry, missing_targets
+            )
+            logger.debug(
+                f"[{rss.name}] sending entry {entry_hash[:8]} to "
+                f"users={sorted(user_ids)} groups={sorted(group_ids)}"
+            )
+            results = await send_message(
+                user_ids, group_ids, msg_to_send, reply_to=reply_to
+            )
+            logger.debug(
+                f"[{rss.name}] send entry {entry_hash[:8]} completed: "
+                f"success={len(_success_target_keys(results))}, total={len(results)}"
+            )
             await _record_delivery_results(rss, entry_hash, results)
 
             if not _success_target_keys(results) and missing_targets:
@@ -117,7 +161,9 @@ async def send_messages(ctx: Context, rss: "RSS"):
             await _write_entry_delivery_state(ctx, rss, entry)
 
     ctx.send_duration_ms += (time.monotonic() - started_at) * 1000
-    await FileIO.truncate_file(ctx.rss_name, len(ctx.new_entries))
+    await FileIO.truncate_file(
+        ctx.rss_name, len(ctx.new_entries) - len(ctx.skipped_entry_hashes)
+    )
 
     if any_success:
         logger.info(

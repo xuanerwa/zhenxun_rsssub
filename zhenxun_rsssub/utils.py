@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -8,6 +9,10 @@ from typing import Any
 
 from nonebot import logger
 from nonebot.adapters.onebot.v11 import Bot
+
+from zhenxun.utils.platform import PlatformUtils
+
+from .globals import plugin_config
 
 _BOT_LIST_CACHE_TTL = 300
 _friend_id_cache: dict[str, tuple[float, set[int]]] = {}
@@ -34,8 +39,12 @@ async def get_bot_friend_id_list(bot: Bot) -> set[int]:
     cached = _cache_get(_friend_id_cache, bot.self_id)
     if cached is not None:
         return cached
-    friends = await bot.get_friend_list()
-    result = {friend["user_id"] for friend in friends}
+    value = getattr(plugin_config, "bot_list_timeout_seconds", 5)
+    timeout = max(1, int(value or 5))
+    friends, _ = await asyncio.wait_for(
+        PlatformUtils.get_friend_list(bot), timeout=timeout
+    )
+    result = {int(friend.user_id) for friend in friends}
     _cache_set(_friend_id_cache, bot.self_id, result)
     return result
 
@@ -45,15 +54,26 @@ async def get_bot_group_id_list(bot: Bot) -> set[int]:
     cached = _cache_get(_group_id_cache, bot.self_id)
     if cached is not None:
         return cached
-    groups = await bot.get_group_list()
-    result = {group["group_id"] for group in groups}
+    value = getattr(plugin_config, "bot_list_timeout_seconds", 5)
+    timeout = max(1, int(value or 5))
+    groups, _ = await asyncio.wait_for(
+        PlatformUtils.get_group_list(bot, only_group=True), timeout=timeout
+    )
+    result = {int(group.group_id) for group in groups}
     _cache_set(_group_id_cache, bot.self_id, result)
     return result
 
 
 async def extract_valid_user_id(bot: Bot, user_ids: set[int]) -> set[int]:
     """提取有效的用户ID"""
-    bot_users = await get_bot_friend_id_list(bot)
+    try:
+        bot_users = await get_bot_friend_id_list(bot)
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"get_friend_list timeout for bot {bot.self_id}; "
+            "skip RSS private target validation this turn"
+        )
+        return user_ids
     valid, invalid = user_ids & bot_users, user_ids - bot_users
     if invalid:
         logger.warning(
@@ -64,7 +84,14 @@ async def extract_valid_user_id(bot: Bot, user_ids: set[int]) -> set[int]:
 
 async def extract_valid_group_id(bot: Bot, group_ids: set[int]) -> set[int]:
     """提取有效的群组ID"""
-    bot_groups = await get_bot_group_id_list(bot)
+    try:
+        bot_groups = await get_bot_group_id_list(bot)
+    except asyncio.TimeoutError:
+        logger.warning(
+            f"get_group_list timeout for bot {bot.self_id}; "
+            "skip RSS group target validation this turn"
+        )
+        return group_ids
     valid, invalid = group_ids & bot_groups, group_ids - bot_groups
     if invalid:
         logger.warning(
