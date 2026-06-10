@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 from ..delivery import build_delivery_targets
 from ..repository_delivery import delivered_target_keys
 from ..repository_entries import load_entries
-from ..utils import chunk_list
+from ..utils import chunk_list, get_entry_datetime
 from .context import Context
 
 TParsingHandlerFunc = Callable[[Context, "RSS"], Awaitable[None]]
@@ -98,6 +98,39 @@ def _filter_handlers(handlers: list[ParsingHandler], url: str) -> list[ParsingHa
     return [h for h in tmp if (h.func.__name__, h.pattern, h.priority) not in to_remove]
 
 
+def _entry_chunks(rss: "RSS", entries: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    window_minutes = max(0, int(getattr(rss, "merge_window_minutes", 0) or 0))
+    if not rss.send_merged_msg or window_minutes <= 0:
+        return list(chunk_list(entries, 5))
+
+    chunks: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    current_start = None
+    window_seconds = window_minutes * 60
+
+    for entry in entries:
+        entry_time = get_entry_datetime(entry)
+        if not current:
+            current = [entry]
+            current_start = entry_time
+            continue
+
+        if (
+            current_start
+            and abs((entry_time - current_start).total_seconds()) <= window_seconds
+        ):
+            current.append(entry)
+            continue
+
+        chunks.append(current)
+        current = [entry]
+        current_start = entry_time
+
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 async def _execute_handlers(handlers: list[ParsingHandler], ctx: Context, rss: "RSS"):
     for h in handlers:
         await h.func(ctx, rss)
@@ -174,8 +207,10 @@ class RSSParser:
             )
             return self.context
 
-        # 为避免发送消息过于频繁，每 5 条更新发送一次消息
-        for chunk_index, chunk in enumerate(chunk_list(self.context.new_entries, 5), 1):
+        # 为避免发送消息过于频繁，默认每 5 条更新发送一次；开启合并窗口后按发布时间分组。
+        for chunk_index, chunk in enumerate(
+            _entry_chunks(self.rss, self.context.new_entries), 1
+        ):
             chunk_started_at = time.monotonic()
             logger.debug(
                 f"[{self.rss.name}] processing chunk {chunk_index}: "

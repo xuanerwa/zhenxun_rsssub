@@ -1,7 +1,7 @@
 from sqlite3 import Connection
 from typing import Any, Literal
 
-from ..globals import plugin_config
+from ..runtime_config import get_cached_config
 
 
 def initialize_cache_db(conn: Connection) -> None:
@@ -17,11 +17,11 @@ def initialize_cache_db(conn: Connection) -> None:
     )
     cursor.close()
     conn.commit()
-    # 移除超过 plugin_config.cache_expire 天没重复过的记录
+    # 移除超过配置天数没重复过的记录
     cursor = conn.cursor()
     cursor.execute(
         "DELETE FROM main WHERE datetime <= DATETIME('Now', 'LocalTime', ?);",
-        (f"-{plugin_config.cache_expire} Day",),
+        (f"-{get_cached_config('cache_expire')} Day",),
     )
     cursor.close()
     conn.commit()

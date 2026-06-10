@@ -31,7 +31,7 @@
 1. **克隆插件仓库**
 
    ```bash
-   git clone https://github.com/your-repo/zhenxun_rsssub.git
+   git clone https://github.com/xuanerwa/zhenxun_rsssub.git
    ```
 
 2. **将插件放入真寻机器人的插件目录**
@@ -98,34 +98,101 @@
 
 ```yaml
 dingyueji:
-  DEBUG: false                    # 调试模式
-  RSSHUB_URL: "https://rsshub.app"  # 默认 RSSHub 地址
-  RSSHUB_FALLBACK_URLS: []        # 备用 RSSHub 地址列表
-  PROXY: null                     # 代理地址（如 "http://127.0.0.1:7890"）
-  BLACK_WORDS: []                 # 全局屏蔽词列表
-  CACHE_EXPIRE: 14                # 订阅历史和媒体缓存保留天数
-  BLOCKQUOTE: true                # 是否保留引用块格式
-  IMAGE_COMPRESS_SIZE: 2048       # 图片压缩尺寸阈值（KB）
-  GIF_COMPRESS_SIZE: 6144         # GIF 压缩尺寸阈值（KB）
-  ENABLE_ONLINE_GIF_COMPRESS: false  # 是否启用在线 GIF 压缩
-  MEDIA_DOWNLOAD_CONCURRENCY: 4   # 媒体下载并发数
-  MEDIA_CACHE_TTL_SECONDS: 300    # 媒体缓存存活时间（秒）
-  MEDIA_CACHE_MAX_ITEMS: 256      # 媒体缓存最大条目数
-  MAX_MEDIA_BYTES_PER_UPDATE: 20971520  # 单次更新最大媒体字节数（20MB）
-  MAX_LENGTH: 500                 # 单条文本推送最大长度
-  RSS_ENTRIES_FILE_LIMIT: 200     # RSS 条目文件保存数量限制
-  EXPORT_MASK_SENSITIVE: true     # 导出时脱敏敏感字段
-  MEDIA_PROXY: null                # 媒体下载专用代理；为空时使用真寻全局 system_proxy
-  MEDIA_DOWNLOAD_TIMEOUT_SECONDS: 8 # 单张媒体下载和处理超时时间（秒）
-  MAX_MEDIA_ERRORS_PER_UPDATE: 3    # 单次更新允许的媒体下载失败次数，0 表示不限制
-  PUSH_ON_IMAGE_PARSE_FAILED: false # 图片解析失败时是否仍然推送该条
-  PUSH_WITH_LINK: false            # 推送正文中是否附带原文链接
-  MESSAGE_SEND_TIMEOUT_SECONDS: 12 # 单个目标消息发送超时时间（秒）
-  SCHEDULER_BATCH_INTERVAL_SECONDS: 60   # 调度器批次间隔（秒）
-  SCHEDULER_BATCH_CONCURRENCY: 4         # 调度器批次并发数
-  SCHEDULER_PER_HOST_CONCURRENCY: 1      # 每个主机并发数
-  SCHEDULER_UPDATE_TIMEOUT_SECONDS: 120  # 单个订阅整轮更新超时时间（秒）
+   DEBUG: false                    # 调试模式
+   RSSHUB_URL: "https://rsshub.app"  # 默认 RSSHub 地址
+   RSSHUB_FALLBACK_URLS: []        # 备用 RSSHub 地址列表
+   PROXY: null                     # 代理地址（如 "http://127.0.0.1:7890"）
+   MEDIA_PROXY: null               # 媒体下载专用代理；为空时使用真寻全局 system_proxy
+   RSS_ENTRIES_FILE_LIMIT: 200     # RSS 条目文件保存数量限制
+   EXPORT_MASK_SENSITIVE: true     # 导出时脱敏敏感字段
+   SCHEDULER_BATCH_CONCURRENCY: 4  # 调度器批次并发数（静态配置）
+   SCHEDULER_PER_HOST_CONCURRENCY: 1# 每个主机并发数（静态配置）
 ```
+
+注意：仓库中部分配置项已从静态 `data/config.yaml` 移为运行时配置（可在 WebUI 或通过运行时配置命令热更），请勿在 `data/config.yaml` 中编辑下列项：
+
+- `private_subscribe_superuser_only`（私聊仅超级用户）
+- `group_whitelist_enabled`（启用群白名单）
+- `group_whitelist`（群白名单）
+- `black_words`（全局屏蔽词）
+- `blockquote`（是否保留引用块）
+- `push_with_link`（推送正文是否附带原文链接）
+- `push_on_image_parse_failed`（图片解析失败时是否仍推送）
+- `max_length`（正文最大长度）
+- `cache_expire`（去重缓存天数）
+- `image_compress_size`（图片压缩阈值，注意：单位为像素，表示最长边像素长度）
+- `gif_compress_size`（GIF 大小阈值，单位为 KB）
+- `enable_online_gif_compress`（在线 GIF 压缩开关，说明：当前服务已移除）
+- `media_download_concurrency`（媒体下载并发数）
+- `media_download_timeout_seconds`（单张媒体下载超时，秒）
+- `media_cache_ttl_seconds`（媒体缓存存活时间，秒）
+- `media_cache_max_items`（媒体缓存最大条目数）
+- `max_media_bytes_per_update`（单轮媒体字节预算）
+- `max_media_errors_per_update`（单轮媒体失败上限）
+- `message_send_timeout_seconds`（单目标消息发送超时，秒）
+- `scheduler_batch_interval_seconds`（调度扫描间隔，秒）
+- `scheduler_update_timeout_seconds`（单订阅更新超时，秒）
+这些运行时配置可在 WebUI 的插件设置中调整，或使用插件提供的运行时配置命令（下面给出具体示例）。
+
+## 🔧 运行时配置（可热更）
+
+说明：以下项已从静态 `data/config.yaml` 移为运行时配置，建议通过 WebUI 或运行时命令修改，修改后立即生效，无需重启。仅超级用户可修改；在群组中操作时需要 @ 机器人。
+
+主要运行时配置（键名为内部 `snake_case`，命令中也支持中文别名或键名）：
+
+- `private_subscribe_superuser_only`（私聊仅超级用户）
+- `group_whitelist_enabled`（启用群白名单）
+- `group_whitelist`（群白名单）
+- `black_words`（全局屏蔽词）
+- `blockquote`（是否保留引用块）
+- `push_with_link`（推送正文是否附带原文链接）
+- `push_on_image_parse_failed`（图片解析失败时是否仍推送）
+- `max_length`（正文最大长度）
+- `cache_expire`（去重缓存天数）
+- `image_compress_size`（图片压缩阈值，注意：单位为像素，表示最长边像素长度）
+- `gif_compress_size`（GIF 大小阈值，单位为 KB）
+- `enable_online_gif_compress`（在线 GIF 压缩开关，当前服务已移除）
+- `media_download_concurrency`（媒体下载并发数）
+- `media_download_timeout_seconds`（单张媒体下载超时，秒）
+- `media_cache_ttl_seconds`（媒体缓存存活时间，秒）
+- `media_cache_max_items`（媒体缓存最大条目数）
+- `max_media_bytes_per_update`（单轮媒体字节预算）
+- `max_media_errors_per_update`（单轮媒体失败上限）
+- `message_send_timeout_seconds`（单目标消息发送超时，秒）
+- `scheduler_batch_interval_seconds`（调度扫描间隔，秒）
+- `scheduler_update_timeout_seconds`（单订阅更新超时，秒）
+
+示例命令（均以机器人命令前缀 `订阅姬` 开始，需为超级用户；群内需 @ 机器人）：
+
+- 查看运行时配置状态：
+
+```text
+订阅姬 配置 状态
+```
+
+- 查看配置帮助（包含可用名称与填写示例）：
+
+```text
+订阅姬 配置 帮助
+```
+
+- 修改某项（支持键名或中文别名）：
+
+```text
+订阅姬 配置 正文最大长度=600
+// 或
+订阅姬 配置 max_length=600
+```
+
+- 修改群白名单（快捷命令示例）：
+
+```text
+订阅姬 配置 群白名单 添加 141514 123456
+订阅姬 配置 群白名单 删除 141514
+订阅姬 配置 群白名单 清空
+```
+
+修改后即时生效，错误或权限不足会返回相应提示；更多用法见机器人的帮助或 WebUI 中的插件说明。
 
 ### 翻译 API 配置（可选）
 

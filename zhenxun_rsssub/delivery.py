@@ -15,9 +15,10 @@ from nonebot_plugin_alconna import FallbackStrategy, UniMessage
 
 from zhenxun.utils.platform import PlatformUtils
 
-from .globals import global_config, plugin_config
+from .globals import global_config
 from .host_adapter import resolve_onebot
 from .rss_message import RssImage, RssMessage
+from .runtime_config import get_cached_config
 
 sending_lock: defaultdict[tuple[int, str], asyncio.Lock] = defaultdict(asyncio.Lock)
 
@@ -80,7 +81,7 @@ def delivery_result(
 
 
 def _send_timeout_seconds() -> int:
-    value = getattr(plugin_config, "message_send_timeout_seconds", 12)
+    value = get_cached_config("message_send_timeout_seconds")
     return max(1, int(value or 12))
 
 
@@ -102,31 +103,76 @@ async def send_onebot_message_with_lock(
 ) -> DeliveryResult:
     start_time = time.monotonic()
     target = DeliveryTarget(target_type, target_id)
+
+    async def _send(current_message: Message):
+        return await bot.send_msg(
+            message_type=target_type,
+            user_id=target_id,
+            group_id=target_id,
+            message=current_message,
+        )
+
     async with sending_lock[(target_id, target_type)]:
         try:
             message = msg
             if reply_to_message_id:
                 message = MessageSegment.reply(int(reply_to_message_id)) + msg
             response = await asyncio.wait_for(
-                bot.send_msg(
-                    message_type=target_type,
-                    user_id=target_id,
-                    group_id=target_id,
-                    message=message,
-                ),
+                _send(message),
                 timeout=_send_timeout_seconds(),
             )
-        except asyncio.TimeoutError:
-            error = f"send_msg timed out after {_send_timeout_seconds()}s"
-            logger.error(
-                f"Failed to send RSS message to {target_type}({target_id}): {error}"
-            )
-            result = delivery_result(target, status="failed", error=error)
         except Exception as e:
-            logger.error(
-                f"Failed to send RSS message to {target_type}({target_id}): {e}"
+            if not reply_to_message_id or isinstance(e, asyncio.TimeoutError):
+                if isinstance(e, asyncio.TimeoutError):
+                    error = f"send_msg timed out after {_send_timeout_seconds()}s"
+                    logger.error(
+                        f"Failed to send RSS message to {target_type}({target_id}): "
+                        f"{error}"
+                    )
+                    result = delivery_result(target, status="failed", error=error)
+                    return result
+                logger.error(
+                    f"Failed to send RSS message to {target_type}({target_id}): {e}"
+                )
+                result = delivery_result(target, status="failed", error=str(e))
+                return result
+
+            logger.warning(
+                f"Failed to send RSS message with reply to {target_type}({target_id}), "
+                f"retry without reply: {e}"
             )
-            result = delivery_result(target, status="failed", error=str(e))
+            try:
+                response = await asyncio.wait_for(
+                    _send(msg),
+                    timeout=_send_timeout_seconds(),
+                )
+            except asyncio.TimeoutError:
+                error = f"send_msg timed out after {_send_timeout_seconds()}s"
+                logger.error(
+                    f"Failed to send RSS message to {target_type}({target_id}): {error}"
+                )
+                result = delivery_result(target, status="failed", error=error)
+            except Exception as retry_error:
+                logger.error(
+                    f"Failed to send RSS message to {target_type}({target_id}): "
+                    f"{retry_error}"
+                )
+                result = delivery_result(
+                    target, status="failed", error=str(retry_error)
+                )
+            else:
+                message_id = None
+                if isinstance(response, dict):
+                    raw_message_id = response.get("message_id")
+                    message_id = (
+                        str(raw_message_id) if raw_message_id is not None else None
+                    )
+                result = delivery_result(
+                    target,
+                    status="success",
+                    message_id=message_id,
+                )
+            return result
         else:
             message_id = None
             if isinstance(response, dict):
@@ -272,7 +318,16 @@ async def _send_uni_to_target(
 ) -> DeliveryResult:
     start_time = time.monotonic()
     delivery_target = DeliveryTarget(target_type, target_id)
+
+    async def _send(current_message: UniMessage, target) -> None:
+        await current_message.send(
+            target=target,
+            bot=bot,
+            fallback=FallbackStrategy.rollback,
+        )
+
     async with sending_lock[(target_id, f"uni:{target_type}")]:
+        target = None
         try:
             target = PlatformUtils.get_target(
                 user_id=str(target_id) if target_type == "private" else None,
@@ -284,20 +339,57 @@ async def _send_uni_to_target(
             if reply_to_message_id:
                 uni_message = UniMessage.reply(reply_to_message_id) + uni_message
             await asyncio.wait_for(
-                uni_message.send(
-                    target=target,
-                    bot=bot,
-                    fallback=FallbackStrategy.rollback,
-                ),
+                _send(uni_message, target),
                 timeout=_send_timeout_seconds(),
             )
-        except asyncio.TimeoutError:
-            error = f"send message timed out after {_send_timeout_seconds()}s"
-            logger.error(
-                f"Failed to send RSS UniMessage to {target_type}({target_id}): {error}"
-            )
-            return delivery_result(delivery_target, status="failed", error=error)
         except Exception as e:
+            if reply_to_message_id and not isinstance(e, asyncio.TimeoutError):
+                logger.warning(
+                    f"Failed to send RSS UniMessage with reply to "
+                    f"{target_type}({target_id}), retry without reply: {e}"
+                )
+                # if target was not obtained, cannot retry
+                if target is None:
+                    error = "no available message target"
+                    logger.error(
+                        f"Failed to send RSS UniMessage to "
+                        f"{target_type}({target_id}): {error}"
+                    )
+                    return delivery_result(
+                        delivery_target, status="failed", error=error
+                    )
+
+                try:
+                    await asyncio.wait_for(
+                        _send(build_uni_message(message), target),
+                        timeout=_send_timeout_seconds(),
+                    )
+                except asyncio.TimeoutError:
+                    error = f"send message timed out after {_send_timeout_seconds()}s"
+                    logger.error(
+                        f"Failed to send RSS UniMessage to "
+                        f"{target_type}({target_id}): {error}"
+                    )
+                    return delivery_result(
+                        delivery_target, status="failed", error=error
+                    )
+                except Exception as retry_error:
+                    logger.error(
+                        f"Failed to send RSS UniMessage to "
+                        f"{target_type}({target_id}): {retry_error}"
+                    )
+                    return delivery_result(
+                        delivery_target, status="failed", error=str(retry_error)
+                    )
+                return delivery_result(delivery_target, status="success")
+
+            if isinstance(e, asyncio.TimeoutError):
+                error = f"send message timed out after {_send_timeout_seconds()}s"
+                logger.error(
+                    f"Failed to send RSS UniMessage to "
+                    f"{target_type}({target_id}): {error}"
+                )
+                return delivery_result(delivery_target, status="failed", error=error)
             logger.error(
                 f"Failed to send RSS UniMessage to {target_type}({target_id}): {e}"
             )

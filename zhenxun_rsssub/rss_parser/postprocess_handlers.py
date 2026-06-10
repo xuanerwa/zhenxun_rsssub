@@ -14,7 +14,7 @@ from ..repository_delivery import (
     upsert_delivery_logs,
 )
 from ..repository_entries import find_entry_by_link
-from ..rss_message import with_title
+from ..rss_message import RssMessage, with_title
 from ..utils import get_entry_hash
 from . import rss_entries_file_operations as FileIO
 from .context import Context
@@ -53,7 +53,9 @@ async def _record_delivery_results(rss: "RSS", entry_hash: str, results) -> None
     )
 
 
-async def _missing_target_keys(ctx: Context, rss: "RSS", entry_hash: str) -> set[TargetKey]:
+async def _missing_target_keys(
+    ctx: Context, rss: "RSS", entry_hash: str
+) -> set[TargetKey]:
     return ctx.target_keys - await delivered_target_keys(rss.name, entry_hash)
 
 
@@ -104,28 +106,28 @@ async def send_messages(ctx: Context, rss: "RSS"):
         return
 
     any_success = False
+    current_entry_hashes = set(ctx.msg_contents)
+    current_entries = [
+        entry for entry in ctx.new_entries if entry.get("hash") in current_entry_hashes
+    ]
 
     if rss.send_merged_msg:
         # 发送合并转发消息
-        msgs_to_send = [
-            with_title(ctx.msg_title, message) for message in ctx.msg_contents.values()
-        ]
+        msgs_to_send = [RssMessage(text=ctx.msg_title), *ctx.msg_contents.values()]
         results = await send_message(rss.user_id, rss.group_id, msgs_to_send)
         success_targets = _success_target_keys(results)
         any_success = bool(success_targets)
         if any_success:
             ctx.messages_sent += len(success_targets) * len(ctx.msg_contents)
-            for entry in ctx.new_entries:
+            for entry in current_entries:
                 entry_hash = entry["hash"]
-                if entry_hash in ctx.skipped_entry_hashes:
-                    continue
                 await _record_delivery_results(rss, entry_hash, results)
                 fully_delivered = await _write_entry_delivery_state(ctx, rss, entry)
                 if not fully_delivered:
                     ctx.msg_error_count += 1
         else:
             logger.warning(f"[{rss.name}]发送合并消息失败，将使用逐条发送")
-            for entry in ctx.new_entries:
+            for entry in current_entries:
                 entry["to_send"] = True
             ctx.msg_error_count += len(ctx.msg_contents)
 
@@ -138,9 +140,7 @@ async def send_messages(ctx: Context, rss: "RSS"):
             delivered = await delivered_target_keys(rss.name, entry_hash)
             missing_targets = ctx.target_keys - delivered
             user_ids, group_ids = _split_target_keys(missing_targets)
-            reply_to = await _reply_targets_for_entry(
-                ctx, rss, entry, missing_targets
-            )
+            reply_to = await _reply_targets_for_entry(ctx, rss, entry, missing_targets)
             logger.debug(
                 f"[{rss.name}] sending entry {entry_hash[:8]} to "
                 f"users={sorted(user_ids)} groups={sorted(group_ids)}"

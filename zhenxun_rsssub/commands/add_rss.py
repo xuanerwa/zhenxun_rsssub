@@ -4,7 +4,7 @@ from yarl import URL
 from ..rss import RSS
 from ..scheduler import create_rss_update_job
 from . import rss_cmd
-from .tools import option_group_id, resolve_command_target
+from .tools import TargetResolveError, option_group_id, resolve_command_target
 
 
 def _same_url(saved_rss: RSS, input_url: str) -> bool:
@@ -23,9 +23,10 @@ def _target_already_subscribed(rss: RSS, target) -> bool:
 @rss_cmd.assign("添加")
 async def add_rss(bot, event, result: Arparma, name: str, url: str | None = None):
     group_id = option_group_id(result, "添加")
-    target = await resolve_command_target(bot, event, group_id)
-    if target is None:
-        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    try:
+        target = await resolve_command_target(bot, event, group_id)
+    except TargetResolveError as e:
+        await rss_cmd.finish(str(e))
 
     rss = await RSS.get_by_name(name)
     if rss is not None:

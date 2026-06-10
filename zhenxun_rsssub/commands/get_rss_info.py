@@ -1,7 +1,12 @@
 from nonebot_plugin_alconna import Arparma
 
 from . import rss_cmd
-from .tools import find_target_rss, option_group_id, resolve_command_target
+from .tools import (
+    TargetResolveError,
+    find_target_rss,
+    option_group_id,
+    resolve_command_target,
+)
 
 
 def _flag(value: bool, true_text: str = "on", false_text: str = "off") -> str:
@@ -11,9 +16,10 @@ def _flag(value: bool, true_text: str = "on", false_text: str = "off") -> str:
 @rss_cmd.assign("详情")
 async def get_rss_information(bot, event, result: Arparma, name: str):
     group_id = option_group_id(result, "详情")
-    target = await resolve_command_target(bot, event, group_id)
-    if target is None:
-        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    try:
+        target = await resolve_command_target(bot, event, group_id)
+    except TargetResolveError as e:
+        await rss_cmd.finish(str(e))
 
     rss = await find_target_rss(target, name)
     if rss is None:
@@ -27,6 +33,7 @@ async def get_rss_information(bot, event, result: Arparma, name: str):
         f"{_flag(bool(rss.cookie), 'set', 'empty')}",
         f"仅标题 {_flag(rss.only_feed_title)} | 仅图片 {_flag(rss.only_feed_pic)}",
         f"下载图片 {_flag(rss.download_pic)} | 合并转发 {_flag(rss.send_merged_msg)}",
+        f"合并窗口：{rss.merge_window_minutes} 分钟",
         f"隐藏内容显示 {_flag(rss.show_hidden_content)}",
         f"白名单关键词：{rss.white_list_keyword}",
         f"黑名单关键词：{rss.black_list_keyword}",

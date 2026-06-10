@@ -14,6 +14,7 @@ from ..rss import RSS
 from ..scheduler import create_rss_update_job
 from . import rss_cmd
 from .tools import (
+    TargetResolveError,
     find_target_rss,
     option_group_id,
     resolve_command_target,
@@ -160,9 +161,10 @@ def _attach_current_target(event: object, record: dict[str, Any]) -> dict[str, A
 @rss_cmd.assign("测试")
 async def test_rss(bot, event, result: Arparma, name: str):
     group_id = option_group_id(result, "测试")
-    target = await resolve_command_target(bot, event, group_id)
-    if target is None:
-        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    try:
+        target = await resolve_command_target(bot, event, group_id)
+    except TargetResolveError as e:
+        await rss_cmd.finish(str(e))
     rss = await find_target_rss(target, name)
     if rss is None:
         await rss_cmd.finish("❌ 找不到该订阅")
@@ -174,9 +176,10 @@ async def test_rss(bot, event, result: Arparma, name: str):
 @rss_cmd.assign("拉取")
 async def pull_rss(bot, event, result: Arparma, name: str):
     group_id = option_group_id(result, "拉取")
-    target = await resolve_command_target(bot, event, group_id)
-    if target is None:
-        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    try:
+        target = await resolve_command_target(bot, event, group_id)
+    except TargetResolveError as e:
+        await rss_cmd.finish(str(e))
     rss = await find_target_rss(target, name)
     if rss is None:
         await rss_cmd.finish("❌ 找不到该订阅")
@@ -205,9 +208,10 @@ async def rss_status(
     name: str | None = None,
 ):
     group_id = option_group_id(result, "状态")
-    target = await resolve_command_target(bot, event, group_id)
-    if target is None:
-        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    try:
+        target = await resolve_command_target(bot, event, group_id)
+    except TargetResolveError as e:
+        await rss_cmd.finish(str(e))
     rss_list = await target_rss_list(target)
     if name:
         rss_list = [rss for rss in rss_list if rss.name == name]
@@ -251,9 +255,10 @@ async def export_rss(
     as_opml = "opml" in options_set or "OPML" in options_set
     raw_export = "raw" in options_set or "原始" in options_set
     mask_sensitive = plugin_config.export_mask_sensitive and not raw_export
-    target = await resolve_command_target(bot, event, group_id)
-    if target is None:
-        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    try:
+        target = await resolve_command_target(bot, event, group_id)
+    except TargetResolveError as e:
+        await rss_cmd.finish(str(e))
     rss_list = await target_rss_list(target)
     if name:
         rss_list = [rss for rss in rss_list if rss.name == name]

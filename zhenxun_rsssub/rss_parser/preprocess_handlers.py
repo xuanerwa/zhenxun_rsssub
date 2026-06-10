@@ -12,7 +12,7 @@ import nonebot_plugin_localstore as store
 if TYPE_CHECKING:
     from ..rss import RSS
 
-from ..globals import plugin_config
+from ..runtime_config import get_cached_config
 from ..utils import get_entry_datetime, get_entry_hash
 from . import rss_entries_file_operations as FileIO
 from .cache_db_manager import initialize_cache_db, is_entry_duplicated
@@ -62,8 +62,8 @@ async def filter_invalid_entries(ctx: Context, rss: "RSS"):
             should_remove = True
             reason = "检测到隐藏内容，已取消发送"
         # 检查是否包含屏蔽词
-        elif plugin_config.black_words and re.findall(
-            "|".join(plugin_config.black_words), summary
+        elif get_cached_config("black_words") and re.findall(
+            "|".join(get_cached_config("black_words")), summary
         ):
             should_remove = True
             reason = "检测到包含屏蔽词的消息，已取消发送"

@@ -4,7 +4,7 @@ import re
 from bs4 import BeautifulSoup, FeatureNotFound
 from yarl import URL
 
-from ..globals import plugin_config
+from ..runtime_config import get_cached_config
 from .hidden_content import remove_hidden_content
 
 
@@ -36,27 +36,10 @@ def _replace_links(soup: BeautifulSoup) -> None:
 
 
 def _remove_reference_link_blocks(soup: BeautifulSoup) -> None:
-    if plugin_config.push_with_link:
+    if get_cached_config("push_with_link"):
         return
-    for tag in soup.find_all(["p", "div", "blockquote"]):
-        if not tag.find_parent(class_=re.compile(r"rsshub-quote", re.I)):
-            continue
-        anchors = tag.find_all("a")
-        if len(anchors) != 1:
-            continue
-        href = anchors[0].get("href") or ""
-        if "t.me/" not in href:
-            continue
-        text = tag.get_text(" ", strip=True)
-        anchor_text = anchors[0].get_text(" ", strip=True)
-        if not text or not anchor_text:
-            continue
-        normalized = re.sub(r"[\s:：·•|/\\\-_,.。!！?？\[\]（）()]+", "", text)
-        normalized_anchor = re.sub(
-            r"[\s:：·•|/\\\-_,.。!！?？\[\]（）()]+", "", anchor_text
-        )
-        if normalized == normalized_anchor or normalized.startswith(normalized_anchor):
-            tag.decompose()
+    for quote in soup.find_all(class_=re.compile(r"rsshub-quote", re.I)):
+        quote.decompose()
 
 
 def extract_reference_links(html: str) -> list[str]:
@@ -96,7 +79,7 @@ def _insert_block_breaks(soup: BeautifulSoup) -> None:
 def _remove_ignored_tags(soup: BeautifulSoup) -> None:
     for tag in soup.find_all(["img", "video", "iframe"]):
         tag.decompose()
-    if not plugin_config.blockquote:
+    if not get_cached_config("blockquote"):
         for tag in soup.find_all("blockquote"):
             tag.decompose()
 
@@ -108,8 +91,9 @@ def _clean_text(text: str) -> str:
     while "\n\n\n" in text:
         text = text.replace("\n\n\n", "\n\n")
     text = text.strip()
-    if 0 < plugin_config.max_length < len(text):
-        text = f"{text[: plugin_config.max_length]}..."
+    max_length = get_cached_config("max_length")
+    if 0 < max_length < len(text):
+        text = f"{text[:max_length]}..."
     return text
 
 
@@ -129,6 +113,7 @@ def extract_image_urls(html: str, *, show_hidden_content: bool = False) -> list[
     soup = _soup(html)
     if not show_hidden_content:
         remove_hidden_content(soup)
+    _remove_reference_link_blocks(soup)
     return [src for img in soup.find_all("img") if (src := img.get("src"))]
 
 
@@ -138,6 +123,7 @@ def extract_video_poster_urls(
     soup = _soup(html)
     if not show_hidden_content:
         remove_hidden_content(soup)
+    _remove_reference_link_blocks(soup)
     return [
         poster for video in soup.find_all("video") if (poster := video.get("poster"))
     ]
@@ -149,6 +135,7 @@ def html_text(
     soup = _soup(html)
     if not show_hidden_content:
         remove_hidden_content(soup)
+    _remove_reference_link_blocks(soup)
     if remove_blockquote:
         for tag in soup.find_all("blockquote"):
             tag.decompose()

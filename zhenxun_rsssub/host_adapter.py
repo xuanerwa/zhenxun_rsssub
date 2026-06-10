@@ -46,6 +46,7 @@ def remember_bot(bot: Bot) -> None:
 
 def resolve_onebot(bot_id: str | None = None) -> Bot | None:
     """Resolve a OneBot V11 bot without falling back to arbitrary adapters."""
+    global _last_onebot_id
     if bot_id:
         try:
             bot = nonebot.get_bot(bot_id)
@@ -61,9 +62,12 @@ def resolve_onebot(bot_id: str | None = None) -> Bot | None:
         try:
             bot = nonebot.get_bot(_last_onebot_id)
         except KeyError:
-            logger.warning(
+            logger.debug(
                 f"RSS remembered OneBot Bot {_last_onebot_id} is not connected"
             )
+            remember_bot_id = _last_onebot_id
+            _last_onebot_id = None
+            logger.debug(f"Cleared RSS remembered OneBot Bot {remember_bot_id}")
         else:
             if isinstance(bot, Bot):
                 return bot

@@ -31,6 +31,7 @@ USAGE = """
     黑名单=正则 或 黑名单=-1   设置/清空黑名单关键词
     cookie=xxx             设置抓取 Cookie
     合并=开/关           是否尝试合并转发
+    合并窗口=1            按发布时间在 1 分钟内合并成一条转发，0 为固定批次
     隐藏内容=显示/隐藏   是否显示 Telegram/RSS 隐藏内容
     暂停=开/关           暂停/恢复订阅
 
@@ -41,6 +42,7 @@ USAGE = """
     订阅姬 拉取 真寻更新
     订阅姬 状态 真寻更新
     订阅姬 设置 真寻更新 频率=30 图片=5
+    订阅姬 设置 TG频道 合并=开 合并窗口=1
     订阅姬 设置 TG频道 隐藏内容=显示
     订阅姬 导出 真寻更新 file opml
     订阅姬 导入 --dry-run file:rss_export_all.json
@@ -145,57 +147,10 @@ CONFIGS = [
         module="dingyueji",
         key="PROXY",
         value=None,
-        help="RSS 抓取使用的代理地址；媒体下载请使用 MEDIA_PROXY 或真寻全局 system_proxy",
+        help="RSS 抓取使用的代理地址；媒体下载请使用 MEDIA_PROXY "
+        "或真寻全局 system_proxy",
         default_value=None,
         type=str,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="BLACK_WORDS",
-        value=None,
-        help="屏蔽词列表，匹配到的内容将被过滤",
-        default_value=None,
-        type=list[str],
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="CACHE_EXPIRE",
-        value=14,
-        help="订阅历史和媒体缓存保留天数",
-        default_value=14,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="BLOCKQUOTE",
-        value=True,
-        help="是否在消息中保留引用块格式",
-        default_value=True,
-        type=bool,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="IMAGE_COMPRESS_SIZE",
-        value=2 * 1024,
-        help="图片压缩尺寸阈值（KB）",
-        default_value=2 * 1024,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="GIF_COMPRESS_SIZE",
-        value=6 * 1024,
-        help="GIF 压缩尺寸阈值（KB）",
-        default_value=6 * 1024,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="ENABLE_ONLINE_GIF_COMPRESS",
-        value=False,
-        help="是否启用在线 GIF 压缩服务",
-        default_value=False,
-        type=bool,
     ),
     RegisterConfig(
         module="dingyueji",
@@ -204,86 +159,6 @@ CONFIGS = [
         help="RSS 媒体下载专用代理；为空时使用真寻全局 system_proxy",
         default_value=None,
         type=str,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="MEDIA_DOWNLOAD_CONCURRENCY",
-        value=4,
-        help="媒体下载并发数",
-        default_value=4,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="MEDIA_DOWNLOAD_TIMEOUT_SECONDS",
-        value=8,
-        help="单张媒体下载和处理超时时间（秒）",
-        default_value=8,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="MEDIA_CACHE_TTL_SECONDS",
-        value=300,
-        help="媒体缓存存活时间（秒）",
-        default_value=300,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="MEDIA_CACHE_MAX_ITEMS",
-        value=256,
-        help="媒体缓存最大条目数",
-        default_value=256,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="MAX_MEDIA_BYTES_PER_UPDATE",
-        value=20 * 1024 * 1024,
-        help="单次更新允许下载的最大媒体总字节数",
-        default_value=20 * 1024 * 1024,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="MAX_MEDIA_ERRORS_PER_UPDATE",
-        value=3,
-        help="单轮更新允许的媒体下载失败次数，达到后跳过后续媒体；0 表示不限制",
-        default_value=3,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="PUSH_ON_IMAGE_PARSE_FAILED",
-        value=False,
-        help="图片解析失败时是否仍然推送该条；关闭时等待下轮重试",
-        default_value=False,
-        type=bool,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="PUSH_WITH_LINK",
-        value=False,
-        help="推送正文中是否附带原文链接",
-        default_value=False,
-        type=bool,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="MESSAGE_SEND_TIMEOUT_SECONDS",
-        value=12,
-        help="单个目标消息发送超时时间（秒）",
-        default_value=12,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="MAX_LENGTH",
-        value=500,
-        help="单条 RSS 文本推送最大长度",
-        default_value=500,
-        type=int,
     ),
     RegisterConfig(
         module="dingyueji",
@@ -303,14 +178,6 @@ CONFIGS = [
     ),
     RegisterConfig(
         module="dingyueji",
-        key="SCHEDULER_BATCH_INTERVAL_SECONDS",
-        value=60,
-        help="调度器批次执行间隔（秒）",
-        default_value=60,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
         key="SCHEDULER_BATCH_CONCURRENCY",
         value=4,
         help="调度器批次并发数",
@@ -323,14 +190,6 @@ CONFIGS = [
         value=1,
         help="每个主机的并发数",
         default_value=1,
-        type=int,
-    ),
-    RegisterConfig(
-        module="dingyueji",
-        key="SCHEDULER_UPDATE_TIMEOUT_SECONDS",
-        value=120,
-        help="单个订阅整轮更新超时时间（秒）",
-        default_value=120,
         type=int,
     ),
 ]
@@ -350,6 +209,21 @@ __plugin_meta__ = PluginMetadata(
         admin_level=5,
         commands=COMMANDS,
         configs=CONFIGS,
+        superuser_help="""
+        指令：
+            订阅姬 配置
+            订阅姬 配置 状态
+            订阅姬 配置 帮助
+            订阅姬 配置 配置名=值 [配置名=值 ...]
+
+        常用示例：
+            订阅姬 配置 推送链接=关
+            订阅姬 配置 图片失败推送=关
+            订阅姬 配置 群白名单启用=开
+            订阅姬 配置 群白名单 添加 141514 123456
+            订阅姬 配置 群白名单 删除 141514
+            订阅姬 配置 群白名单 清空
+        """.strip(),
         aliases={"RSS", "RSS订阅"},
     ).to_dict(),
 )

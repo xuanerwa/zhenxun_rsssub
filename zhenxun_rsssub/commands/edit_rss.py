@@ -10,7 +10,7 @@ from ..repository_entries import rename_entries_file
 from ..rss import RSS
 from ..scheduler import create_rss_update_job, remove_rss_update_job
 from . import rss_cmd
-from .tools import option_group_id, resolve_command_target
+from .tools import TargetResolveError, option_group_id, resolve_command_target
 
 
 async def handle_edit_name(rss: RSS, value: str, event=None):
@@ -137,6 +137,13 @@ def handle_edit_send_merge_msg(rss: RSS, value: str, event=None):
     rss.send_merged_msg = bool(int(value))
 
 
+def handle_edit_merge_window(rss: RSS, value: str, event=None):
+    minutes = int(float(value))
+    if minutes < 0:
+        raise Exception("❌ merge_window 参数错误")
+    rss.merge_window_minutes = minutes
+
+
 def handle_edit_show_hidden_content(rss: RSS, value: str, event=None):
     rss.show_hidden_content = bool(int(value))
 
@@ -162,6 +169,7 @@ EDIT_HANDLERS = {
     "image": handle_edit_max_image_number,
     "hexie": handle_exit_content_to_remove,
     "merge": handle_edit_send_merge_msg,
+    "merge_window": handle_edit_merge_window,
     "hidden": handle_edit_show_hidden_content,
     "stop": handle_edit_stop,
 }
@@ -189,6 +197,8 @@ EDIT_KEY_ALIASES = {
     "河蟹": "hexie",
     "过滤": "hexie",
     "合并": "merge",
+    "合并窗口": "merge_window",
+    "合并时间": "merge_window",
     "隐藏内容": "hidden",
     "隐藏": "hidden",
     "剧透": "hidden",
@@ -235,6 +245,7 @@ EDIT_HELP = {
     "图片": "图片=0 或 图片=5",
     "河蟹": "河蟹=+正则 或 河蟹=-正则",
     "合并": "合并=开/关",
+    "合并窗口": "合并窗口=1（分钟，0 表示按固定批次）",
     "隐藏内容": "隐藏内容=显示/隐藏",
     "暂停": "暂停=开/关",
 }
@@ -269,9 +280,10 @@ def parse_edit_option(option: str) -> tuple[str, str]:
 async def edit_rss(bot, event, result: Arparma, name: str, options: list[str]):
     group_id = option_group_id(result, "设置")
     rss = await RSS.get_by_name(name)
-    target = await resolve_command_target(bot, event, group_id)
-    if target is None:
-        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    try:
+        target = await resolve_command_target(bot, event, group_id)
+    except TargetResolveError as e:
+        await rss_cmd.finish(str(e))
 
     missing = not rss
     if rss and target.scene_type == "private":

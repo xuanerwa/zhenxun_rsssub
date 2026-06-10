@@ -14,6 +14,7 @@ require("nonebot_plugin_localstore")
 import nonebot_plugin_localstore as store
 
 from ..globals import plugin_config
+from ..runtime_config import get_cached_config
 from ..rss_message import RssImage
 
 IMAGE_CONTENT_TYPES = {
@@ -36,7 +37,7 @@ ACCEPT_IMAGE_ERROR_STATUS_CODES = tuple(range(400, 500))
 
 
 def _download_limit() -> int:
-    return max(1, int(plugin_config.media_download_concurrency or 1))
+    return max(1, int(get_cached_config("media_download_concurrency") or 1))
 
 
 def _get_download_semaphore() -> asyncio.Semaphore:
@@ -108,12 +109,12 @@ async def _get_cached_image(key: str) -> bytes | None:
 
 
 async def _set_cached_image(url: str, content: bytes) -> None:
-    ttl = max(0, int(plugin_config.media_cache_ttl_seconds or 0))
+    ttl = max(0, int(get_cached_config("media_cache_ttl_seconds") or 0))
     if ttl <= 0:
         return
     digest_key = f"sha256:{hashlib.sha256(content).hexdigest()}"
     async with _image_cache_lock:
-        max_items = max(2, int(plugin_config.media_cache_max_items or 2))
+        max_items = max(2, int(get_cached_config("media_cache_max_items") or 2))
         if cached := _image_cache.get(digest_key):
             expires_at, cached_content = cached
             if expires_at > time.monotonic():
@@ -198,7 +199,10 @@ async def compress_image(
                 image = Image.open(output)
         # 降低图片分辨率
         image.thumbnail(
-            (plugin_config.image_compress_size, plugin_config.image_compress_size)
+            (
+                get_cached_config("image_compress_size"),
+                get_cached_config("image_compress_size"),
+            )
         )
         width, height = image.size
         logger.debug(f"调整图片大小至: {width} * {height}")
@@ -209,8 +213,8 @@ async def compress_image(
         return image
     else:
         if (
-            plugin_config.enable_online_gif_compress
-            and len(content) > plugin_config.gif_compress_size * 1024
+            get_cached_config("enable_online_gif_compress")
+            and len(content) > get_cached_config("gif_compress_size") * 1024
         ):
             logger.warning("Online GIF compression was removed; send original GIF")
         return content

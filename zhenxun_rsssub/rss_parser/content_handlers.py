@@ -12,7 +12,7 @@ from yarl import URL
 if TYPE_CHECKING:
     from ..rss import RSS
 
-from ..globals import plugin_config
+from ..runtime_config import get_cached_config
 from ..rss_message import RssImage
 from ..utils import get_entry_datetime
 from .context import Context
@@ -28,19 +28,19 @@ from .utils import get_summary
 
 
 def _remaining_media_bytes(ctx: Context) -> int | None:
-    limit = int(plugin_config.max_media_bytes_per_update or 0)
+    limit = int(get_cached_config("max_media_bytes_per_update") or 0)
     if limit <= 0:
         return None
     return max(0, limit - ctx.media_bytes_used)
 
 
 def _media_timeout_seconds() -> int:
-    value = getattr(plugin_config, "media_download_timeout_seconds", 8)
+    value = get_cached_config("media_download_timeout_seconds")
     return max(1, int(value or 8))
 
 
 def _max_media_errors_per_update() -> int:
-    value = getattr(plugin_config, "max_media_errors_per_update", 3)
+    value = get_cached_config("max_media_errors_per_update")
     return max(0, int(value or 0))
 
 
@@ -127,7 +127,7 @@ async def handle_entry_title(ctx: Context, rss: "RSS"):
     entry = ctx.entry
 
     entry_title = entry.get("title", "无标题")
-    if not plugin_config.blockquote:
+    if not get_cached_config("blockquote"):
         entry_title = re.sub(r" - 转发 .*", "", entry_title)
 
     entry_title = "标题：" + entry_title
@@ -140,7 +140,7 @@ async def handle_entry_title(ctx: Context, rss: "RSS"):
     try:
         summary_text = html_text(
             get_summary(entry),
-            remove_blockquote=not plugin_config.blockquote,
+            remove_blockquote=not get_cached_config("blockquote"),
             show_hidden_content=rss.show_hidden_content,
         )
         similarity = SequenceMatcher(
@@ -237,7 +237,7 @@ async def remove_unwanted_content(ctx: Context, rss: "RSS"):
 @ParsingHandlerManager.process_handler(priority=70)
 async def note_link(ctx: Context, rss: "RSS"):
     """添加文章链接"""
-    if not plugin_config.push_with_link:
+    if not get_cached_config("push_with_link"):
         return
     ctx.msg_text_buffer += f"\n\n链接：{ctx.entry.get('link', '无链接')}"
 

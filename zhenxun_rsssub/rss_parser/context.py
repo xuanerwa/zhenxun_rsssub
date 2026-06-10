@@ -6,7 +6,7 @@ from typing import Any
 from nonebot import logger
 
 from ..delivery import DeliveryTarget
-from ..globals import plugin_config
+from ..runtime_config import get_cached_config
 from ..rss_message import RssImage, RssMessage
 
 
@@ -61,7 +61,7 @@ class Context:
         entry_hash = self.entry["hash"]  # 预处理第 1 步计算得到
         message = RssMessage(text=self.msg_text_buffer, images=self.msg_image_buffer)
         if (
-            not plugin_config.push_on_image_parse_failed
+            not get_cached_config("push_on_image_parse_failed")
             and any(image.failed for image in self.msg_image_buffer)
         ):
             logger.warning(

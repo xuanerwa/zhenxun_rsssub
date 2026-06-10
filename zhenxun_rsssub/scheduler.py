@@ -13,6 +13,7 @@ from yarl import URL
 from . import feed_state
 from .globals import plugin_config
 from .host_adapter import resolve_onebot
+from .runtime_config import get_cached_config
 from .rss import RSS
 
 require("nonebot_plugin_apscheduler")
@@ -48,7 +49,7 @@ def _get_batch_lock() -> asyncio.Lock:
 
 
 def _configured_batch_interval_seconds() -> int:
-    return max(10, int(plugin_config.scheduler_batch_interval_seconds or 60))
+    return max(10, int(get_cached_config("scheduler_batch_interval_seconds") or 60))
 
 
 def _configured_batch_concurrency() -> int:
@@ -60,9 +61,7 @@ def _configured_host_concurrency() -> int:
 
 
 def _configured_update_timeout_seconds() -> int:
-    return max(
-        1, int(getattr(plugin_config, "scheduler_update_timeout_seconds", 120) or 120)
-    )
+    return max(1, int(get_cached_config("scheduler_update_timeout_seconds") or 120))
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -166,9 +165,13 @@ async def _run_one_feed(rss: RSS, *, force: bool = False) -> None:
 async def check_rss_update(rss: RSS, *, force: bool = False):
     """检查单个RSS订阅的更新。"""
     logger.info(f"检查RSS订阅更新: {rss.name}")
+    bot = resolve_onebot()
+    if bot is None:
+        logger.warning(f"{rss.name} RSS update skipped: no available OneBot bot")
+        return
     try:
         await asyncio.wait_for(
-            rss.update(resolve_onebot(), force=force),
+            rss.update(bot, force=force),
             timeout=_configured_update_timeout_seconds(),
         )
     except asyncio.TimeoutError:

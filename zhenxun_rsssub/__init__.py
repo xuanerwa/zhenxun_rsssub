@@ -8,6 +8,7 @@ from . import commands as commands
 from .host_adapter import remember_bot
 from .plugin_meta import __plugin_meta__ as __plugin_meta__
 from .rss import RSS
+from .runtime_config import load_runtime_config
 from .scheduler import create_rss_update_job
 
 driver = get_driver()
@@ -32,6 +33,7 @@ async def _initialize_rss_jobs(bot: OneBot | None = None) -> None:
         if _rss_jobs_initialized:
             return
 
+        await load_runtime_config()
         logger.info("加载RSS数据...")
         rss_list = await RSS.load_rss_data()
 

@@ -4,9 +4,14 @@ from nonebot.adapters import Bot, Event
 from nonebot.permission import SUPERUSER
 from nonebot_plugin_alconna import Arparma
 
+from ..access_control import is_group_allowed
 from ..host_adapter import get_event_target
 from ..host_adapter import RssTarget
 from ..rss import RSS
+
+
+class TargetResolveError(Exception):
+    pass
 
 
 def option_group_id(result: Arparma | None, subcommand: str) -> str | None:
@@ -28,7 +33,9 @@ async def resolve_command_target(
     """
     if group_id:
         if not await SUPERUSER(bot, event):
-            return None
+            raise TargetResolveError("❌ 只有超级用户可以指定群组")
+        if not is_group_allowed(group_id):
+            raise TargetResolveError("❌ 该群不在订阅姬群白名单中")
         return RssTarget(scene_type="group", group_id=int(group_id))
     return get_event_target(event)
 

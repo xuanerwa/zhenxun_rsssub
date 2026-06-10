@@ -60,6 +60,8 @@ class RSS:
     content_to_remove: set[str] = field(default_factory=set)
     # 当一次更新多条消息时，是否尝试发送合并消息
     send_merged_msg: bool = False
+    # 合并转发时间窗口（分钟），0 表示按固定批次合并
+    merge_window_minutes: int = 0
     # 是否显示 Telegram/RSS 中带 spoiler/隐藏标记的内容
     show_hidden_content: bool = False
     # 停止更新

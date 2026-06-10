@@ -41,6 +41,8 @@ class RssFeed(Model):
     """正文待移除内容"""
     send_merged_msg = fields.BooleanField(default=False, description="是否发送合并消息")
     """是否发送合并消息"""
+    merge_window_minutes = fields.IntField(default=0, description="合并转发时间窗口（分钟）")
+    """合并转发时间窗口（分钟）"""
     show_hidden_content = fields.BooleanField(default=False, description="是否显示隐藏内容")
     """是否显示隐藏内容"""
     stop = fields.BooleanField(default=False, description="停止更新")
@@ -161,3 +163,16 @@ class RssFeedState(Model):
         table = "rss_feed_state"
         table_description = "RSS订阅状态"
         indexes = [("feed_name", "state_key")]
+
+
+class RssGlobalConfig(Model):
+    """RSS通用运行时配置表"""
+
+    id = fields.IntField(pk=True, generated=True, auto_increment=True)
+    config_key = fields.CharField(255, unique=True, description="配置键")
+    config_value = fields.JSONField(description="配置值")
+    updated_at = fields.DatetimeField(auto_now=True, description="更新时间")
+
+    class Meta:
+        table = "rss_global_config"
+        table_description = "RSS通用运行时配置"

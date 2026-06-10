@@ -5,7 +5,7 @@ from nonebot_plugin_alconna import Arparma
 from ..rss import RSS
 from ..scheduler import create_rss_update_job, remove_rss_update_job
 from . import rss_cmd
-from .tools import option_group_id, resolve_command_target
+from .tools import TargetResolveError, option_group_id, resolve_command_target
 
 
 @rss_cmd.assign("删除")
@@ -16,9 +16,10 @@ async def delete_rss(
     names: tuple[str, ...],
 ):
     group_id = option_group_id(result, "删除")
-    target = await resolve_command_target(bot, event, group_id)
-    if target is None:
-        await rss_cmd.finish("❌ 只有超级用户可以指定群组")
+    try:
+        target = await resolve_command_target(bot, event, group_id)
+    except TargetResolveError as e:
+        await rss_cmd.finish(str(e))
 
     success: list[str] = []
     fail: list[str] = []

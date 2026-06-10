@@ -46,3 +46,8 @@ alconna = Alconna(
     ),
     Subcommand("导入", Args["data", MultiVar(str)]),
 )
+
+config_alconna = Alconna(
+    "订阅姬",
+    Subcommand("配置", Args["options?", MultiVar(str)]),
+)
