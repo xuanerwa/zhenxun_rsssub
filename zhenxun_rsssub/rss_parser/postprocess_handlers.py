@@ -111,7 +111,7 @@ async def send_messages(ctx: Context, rss: "RSS"):
         entry for entry in ctx.new_entries if entry.get("hash") in current_entry_hashes
     ]
 
-    if rss.send_merged_msg:
+    if rss.send_merged_msg and len(ctx.msg_contents) >= 2:
         # 发送合并转发消息
         msgs_to_send = [RssMessage(text=ctx.msg_title), *ctx.msg_contents.values()]
         results = await send_message(rss.user_id, rss.group_id, msgs_to_send)
