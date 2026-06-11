@@ -109,34 +109,9 @@ dingyueji:
    SCHEDULER_PER_HOST_CONCURRENCY: 1# 每个主机并发数（静态配置）
 ```
 
-注意：仓库中部分配置项已从静态 `data/config.yaml` 移为运行时配置（可在 WebUI 或通过运行时配置命令热更），请勿在 `data/config.yaml` 中编辑下列项：
-
-- `private_subscribe_superuser_only`（私聊仅超级用户）
-- `group_whitelist_enabled`（启用群白名单）
-- `group_whitelist`（群白名单）
-- `black_words`（全局屏蔽词）
-- `blockquote`（是否保留引用块）
-- `push_with_link`（推送正文是否附带原文链接）
-- `push_on_image_parse_failed`（图片解析失败时是否仍推送）
-- `max_length`（正文最大长度）
-- `cache_expire`（去重缓存天数）
-- `image_compress_size`（图片压缩阈值，注意：单位为像素，表示最长边像素长度）
-- `gif_compress_size`（GIF 大小阈值，单位为 KB）
-- `enable_online_gif_compress`（在线 GIF 压缩开关，说明：当前服务已移除）
-- `media_download_concurrency`（媒体下载并发数）
-- `media_download_timeout_seconds`（单张媒体下载超时，秒）
-- `media_cache_ttl_seconds`（媒体缓存存活时间，秒）
-- `media_cache_max_items`（媒体缓存最大条目数）
-- `max_media_bytes_per_update`（单轮媒体字节预算）
-- `max_media_errors_per_update`（单轮媒体失败上限）
-- `message_send_timeout_seconds`（单目标消息发送超时，秒）
-- `scheduler_batch_interval_seconds`（调度扫描间隔，秒）
-- `scheduler_update_timeout_seconds`（单订阅更新超时，秒）
-这些运行时配置可在 WebUI 的插件设置中调整，或使用插件提供的运行时配置命令（下面给出具体示例）。
-
 ## 🔧 运行时配置（可热更）
 
-说明：以下项已从静态 `data/config.yaml` 移为运行时配置，建议通过 WebUI 或运行时命令修改，修改后立即生效，无需重启。仅超级用户可修改；在群组中操作时需要 @ 机器人。
+说明：可通过 WebUI 或运行时命令修改，修改后立即生效，无需重启。仅超级用户可修改；在群组中操作时需要 @ 机器人。
 
 主要运行时配置（键名为内部 `snake_case`，命令中也支持中文别名或键名）：
 
