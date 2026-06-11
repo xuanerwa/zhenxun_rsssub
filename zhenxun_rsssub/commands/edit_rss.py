@@ -148,6 +148,20 @@ def handle_edit_show_hidden_content(rss: RSS, value: str, event=None):
     rss.show_hidden_content = bool(int(value))
 
 
+def handle_edit_max_length(rss: RSS, value: str, event=None):
+    max_length = int(float(value))
+    if max_length < 0:
+        raise Exception("❌ max_length 参数错误")
+    rss.max_length = max_length
+
+
+def handle_edit_split_message_length(rss: RSS, value: str, event=None):
+    split_length = int(float(value))
+    if split_length < 0:
+        raise Exception("❌ split_message_length 参数错误")
+    rss.split_message_length = split_length
+
+
 def handle_edit_stop(rss: RSS, value: str, event=None):
     rss.stop = bool(int(value))
 
@@ -171,6 +185,8 @@ EDIT_HANDLERS = {
     "merge": handle_edit_send_merge_msg,
     "merge_window": handle_edit_merge_window,
     "hidden": handle_edit_show_hidden_content,
+    "max_length": handle_edit_max_length,
+    "split_message_length": handle_edit_split_message_length,
     "stop": handle_edit_stop,
 }
 
@@ -202,6 +218,13 @@ EDIT_KEY_ALIASES = {
     "隐藏内容": "hidden",
     "隐藏": "hidden",
     "剧透": "hidden",
+    "正文长度": "max_length",
+    "最大正文长度": "max_length",
+    "截断长度": "max_length",
+    "分段长度": "split_message_length",
+    "分段字节": "split_message_length",
+    "分段": "split_message_length",
+    "消息分段": "split_message_length",
     "暂停": "stop",
     "停止": "stop",
 }
@@ -247,6 +270,8 @@ EDIT_HELP = {
     "合并": "合并=开/关",
     "合并窗口": "合并窗口=1（分钟，0 表示按固定批次）",
     "隐藏内容": "隐藏内容=显示/隐藏",
+    "正文长度": "正文长度=1200（超过后截断，0 表示不截断）",
+    "分段长度": "分段长度=500（超过后按合并转发分段，0 表示不分段）",
     "暂停": "暂停=开/关",
 }
 

@@ -87,15 +87,6 @@ CONFIG_ITEMS: tuple[RuntimeConfigItem, ...] = (
         value_hint="开/关",
     ),
     RuntimeConfigItem(
-        key="max_length",
-        aliases=("正文长度", "最大正文长度"),
-        title="正文最大长度",
-        type="int",
-        default=500,
-        help="正文超过这个长度会被截断。0 表示不限制。",
-        value_hint="500",
-    ),
-    RuntimeConfigItem(
         key="cache_expire",
         aliases=("缓存天数", "去重缓存天数"),
         title="去重缓存天数",

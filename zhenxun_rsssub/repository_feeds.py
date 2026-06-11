@@ -28,6 +28,10 @@ async def _upsert_feed_record_async(name: str, data: dict[str, Any]) -> None:
         "send_merged_msg": data.get("send_merged_msg", False),
         "merge_window_minutes": data.get("merge_window_minutes", 0),
         "show_hidden_content": data.get("show_hidden_content", False),
+        "max_length": data.get("max_length", 0),
+        "split_message_length": data.get(
+            "split_message_length", data.get("split_message_bytes", 0)
+        ),
         "stop": data.get("stop", False),
         "etag": data.get("etag"),
         "last_modified": data.get("last_modified"),
@@ -77,6 +81,8 @@ async def load_feed_records() -> list[dict[str, Any]]:
             "send_merged_msg": feed.send_merged_msg,
             "merge_window_minutes": getattr(feed, "merge_window_minutes", 0),
             "show_hidden_content": getattr(feed, "show_hidden_content", False),
+            "max_length": getattr(feed, "max_length", 0),
+            "split_message_length": getattr(feed, "split_message_length", 0),
             "stop": feed.stop,
             "etag": feed.etag,
             "last_modified": feed.last_modified,

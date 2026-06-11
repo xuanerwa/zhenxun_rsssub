@@ -90,11 +90,7 @@ def _clean_text(text: str) -> str:
     text = re.sub(r"\n[ \t]+", "\n", text)
     while "\n\n\n" in text:
         text = text.replace("\n\n\n", "\n\n")
-    text = text.strip()
-    max_length = get_cached_config("max_length")
-    if 0 < max_length < len(text):
-        text = f"{text[:max_length]}..."
-    return text
+    return text.strip()
 
 
 def handle_html_tags(html: object, *, show_hidden_content: bool = False) -> str:

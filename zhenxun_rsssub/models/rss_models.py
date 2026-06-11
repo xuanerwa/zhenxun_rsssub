@@ -45,6 +45,10 @@ class RssFeed(Model):
     """合并转发时间窗口（分钟）"""
     show_hidden_content = fields.BooleanField(default=False, description="是否显示隐藏内容")
     """是否显示隐藏内容"""
+    max_length = fields.IntField(default=0, description="正文截断长度")
+    """正文截断长度"""
+    split_message_length = fields.IntField(default=0, description="单条消息分段长度")
+    """单条消息分段长度"""
     stop = fields.BooleanField(default=False, description="停止更新")
     """停止更新"""
     etag = fields.CharField(255, null=True, description="HTTP ETag")

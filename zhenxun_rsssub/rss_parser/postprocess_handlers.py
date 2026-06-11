@@ -20,6 +20,7 @@ from . import rss_entries_file_operations as FileIO
 from .context import Context
 from .html_document_processor import extract_reference_links
 from .message_sender import send_message
+from .message_splitter import build_split_forward_messages, truncate_message_text
 from .rss_parser import ParsingHandlerManager
 from .utils import get_summary
 
@@ -96,6 +97,31 @@ async def _reply_targets_for_entry(
     return reply_to
 
 
+def _max_config_int(rss: "RSS", key: str) -> int:
+    return max(0, int(getattr(rss, key, 0) or 0))
+
+
+def _message_for_send(title: str, content: RssMessage, rss: "RSS") -> RssMessage | list[RssMessage]:
+    content = truncate_message_text(content, _max_config_int(rss, "max_length"))
+    return (
+        build_split_forward_messages(
+            title, content, _max_config_int(rss, "split_message_length")
+        )
+        or with_title(title, content)
+    )
+
+
+def _merged_messages_for_send(ctx: Context, rss: "RSS") -> list[RssMessage]:
+    max_length = _max_config_int(rss, "max_length")
+    return [
+        RssMessage(text=ctx.msg_title),
+        *(
+            truncate_message_text(content, max_length)
+            for content in ctx.msg_contents.values()
+        ),
+    ]
+
+
 @ParsingHandlerManager.postprocess_handler()
 async def send_messages(ctx: Context, rss: "RSS"):
     started_at = time.monotonic()
@@ -113,7 +139,7 @@ async def send_messages(ctx: Context, rss: "RSS"):
 
     if rss.send_merged_msg and len(ctx.msg_contents) >= 2:
         # 发送合并转发消息
-        msgs_to_send = [RssMessage(text=ctx.msg_title), *ctx.msg_contents.values()]
+        msgs_to_send = _merged_messages_for_send(ctx, rss)
         results = await send_message(rss.user_id, rss.group_id, msgs_to_send)
         success_targets = _success_target_keys(results)
         any_success = bool(success_targets)
@@ -136,14 +162,15 @@ async def send_messages(ctx: Context, rss: "RSS"):
         for entry_hash, content in ctx.msg_contents.items():
             # 逐条发送消息
             entry = ctx.new_entries[new_entries_hash_index_map[entry_hash]]
-            msg_to_send = with_title(ctx.msg_title, content)
+            msg_to_send = _message_for_send(ctx.msg_title, content, rss)
             delivered = await delivered_target_keys(rss.name, entry_hash)
             missing_targets = ctx.target_keys - delivered
             user_ids, group_ids = _split_target_keys(missing_targets)
             reply_to = await _reply_targets_for_entry(ctx, rss, entry, missing_targets)
             logger.debug(
                 f"[{rss.name}] sending entry {entry_hash[:8]} to "
-                f"users={sorted(user_ids)} groups={sorted(group_ids)}"
+                f"users={sorted(user_ids)} groups={sorted(group_ids)} "
+                f"segments={len(msg_to_send) if isinstance(msg_to_send, list) else 1}"
             )
             results = await send_message(
                 user_ids, group_ids, msg_to_send, reply_to=reply_to

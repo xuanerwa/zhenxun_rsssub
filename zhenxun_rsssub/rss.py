@@ -64,6 +64,10 @@ class RSS:
     merge_window_minutes: int = 0
     # 是否显示 Telegram/RSS 中带 spoiler/隐藏标记的内容
     show_hidden_content: bool = False
+    # 正文超过该长度时截断；0 表示不截断
+    max_length: int = 0
+    # 单条消息超过该长度时使用合并转发分段；0 表示不分段
+    split_message_length: int = 0
     # 停止更新
     stop: bool = False
     # HTTP ETag
@@ -151,6 +155,13 @@ class RSS:
             item["next_recommended_update_at"] = None
         if not isinstance(item.get("last_metrics"), dict):
             item["last_metrics"] = {}
+        legacy_split_bytes = item.pop("split_message_bytes", None)
+        if not isinstance(item.get("max_length"), int):
+            item["max_length"] = 0
+        if not isinstance(item.get("split_message_length"), int):
+            item["split_message_length"] = (
+                legacy_split_bytes if isinstance(legacy_split_bytes, int) else 0
+            )
         return item
 
     @classmethod

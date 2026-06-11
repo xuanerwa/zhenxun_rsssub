@@ -35,6 +35,8 @@ async def get_rss_information(bot, event, result: Arparma, name: str):
         f"下载图片 {_flag(rss.download_pic)} | 合并转发 {_flag(rss.send_merged_msg)}",
         f"合并窗口：{rss.merge_window_minutes} 分钟",
         f"隐藏内容显示 {_flag(rss.show_hidden_content)}",
+        f"正文长度：{rss.max_length or '不截断'}",
+        f"分段长度：{rss.split_message_length or '不分段'}",
         f"白名单关键词：{rss.white_list_keyword}",
         f"黑名单关键词：{rss.black_list_keyword}",
         f"去重模式：{rss.deduplication_modes}",
