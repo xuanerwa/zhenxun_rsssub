@@ -125,6 +125,24 @@ def extract_video_poster_urls(
     ]
 
 
+def extract_video_sources(
+    html: str, *, show_hidden_content: bool = False
+) -> list[tuple[str, str | None]]:
+    soup = _soup(html)
+    if not show_hidden_content:
+        remove_hidden_content(soup)
+    _remove_reference_link_blocks(soup)
+    sources: list[tuple[str, str | None]] = []
+    for video in soup.find_all("video"):
+        duration = video.get("duration") or video.get("data-duration")
+        if src := video.get("src"):
+            sources.append((src, duration))
+        for source in video.find_all("source"):
+            if src := source.get("src"):
+                sources.append((src, duration or source.get("duration")))
+    return list(dict.fromkeys(sources))
+
+
 def html_text(
     html: str, *, remove_blockquote: bool = False, show_hidden_content: bool = False
 ) -> str:

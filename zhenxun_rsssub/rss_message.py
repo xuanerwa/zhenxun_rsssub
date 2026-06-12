@@ -18,9 +18,25 @@ class RssImage:
 
 
 @dataclass(slots=True)
+class RssVideo:
+    raw: bytes | None = None
+    url: str | None = None
+    name: str = "video.mp4"
+    missing_text: str = ""
+    bytes_used: int = 0
+    failed: bool = False
+    mimetype: str = "video/mp4"
+
+    @property
+    def available(self) -> bool:
+        return bool(self.raw or (self.url and not self.failed))
+
+
+@dataclass(slots=True)
 class RssMessage:
     text: str = ""
     images: list[RssImage] = field(default_factory=list)
+    videos: list[RssVideo] = field(default_factory=list)
     link: str = ""
     nodes: list["RssMessage"] = field(default_factory=list)
 
@@ -30,6 +46,9 @@ class RssMessage:
     def extend_images(self, images: list[RssImage]) -> None:
         self.images.extend(images)
 
+    def extend_videos(self, videos: list[RssVideo]) -> None:
+        self.videos.extend(videos)
+
     def plain_text(self) -> str:
         parts = [self.text] if self.text else []
         if self.link:
@@ -37,10 +56,19 @@ class RssMessage:
         for image in self.images:
             if not image.available and image.missing_text:
                 parts.append(image.missing_text)
+        for video in self.videos:
+            if not video.available and video.missing_text:
+                parts.append(video.missing_text)
         return "\n".join(part for part in parts if part)
 
     def is_empty(self) -> bool:
-        return not self.text and not self.link and not self.images and not self.nodes
+        return (
+            not self.text
+            and not self.link
+            and not self.images
+            and not self.videos
+            and not self.nodes
+        )
 
 
 def with_title(title: str, message: RssMessage) -> RssMessage:
@@ -48,6 +76,7 @@ def with_title(title: str, message: RssMessage) -> RssMessage:
     return RssMessage(
         text=prefix + message.text,
         images=list(message.images),
+        videos=list(message.videos),
         link=message.link,
         nodes=list(message.nodes),
     )

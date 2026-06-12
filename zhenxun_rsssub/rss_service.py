@@ -138,7 +138,10 @@ async def update_locked(rss, bot: Bot | None = None, *, force: bool = False):
         send_duration_ms=ctx.send_duration_ms,
         entry_count=len(ctx.entries),
         new_entry_count=len(ctx.new_entries),
-        image_count=sum(len(message.images) for message in ctx.msg_contents.values()),
+        image_count=sum(
+            len(message.images) + len(message.videos)
+            for message in ctx.msg_contents.values()
+        ),
         messages_sent=ctx.messages_sent,
         error=None,
     )
@@ -196,7 +199,10 @@ async def test_parse(rss) -> tuple[bool, str]:
         send_duration_ms=ctx.send_duration_ms,
         entry_count=len(ctx.entries),
         new_entry_count=len(ctx.new_entries),
-        image_count=sum(len(message.images) for message in ctx.msg_contents.values()),
+        image_count=sum(
+            len(message.images) + len(message.videos)
+            for message in ctx.msg_contents.values()
+        ),
         messages_sent=0,
         error=None,
     )
@@ -217,7 +223,8 @@ async def test_parse(rss) -> tuple[bool, str]:
         if len(preview) > 120:
             preview = preview[:117] + "..."
         lines.append(
-            f"{index}. {preview or '[image only]'} | images {len(message.images)}"
+            f"{index}. {preview or '[media only]'} | "
+            f"images {len(message.images)} videos {len(message.videos)}"
         )
         if index >= 5:
             break

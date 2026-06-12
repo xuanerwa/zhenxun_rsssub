@@ -17,7 +17,7 @@ from zhenxun.utils.platform import PlatformUtils
 
 from .globals import global_config
 from .host_adapter import resolve_onebot
-from .rss_message import RssImage, RssMessage
+from .rss_message import RssImage, RssMessage, RssVideo
 from .runtime_config import get_cached_config
 
 sending_lock: defaultdict[tuple[int, str], asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -189,12 +189,25 @@ async def send_onebot_message_with_lock(
 
 
 def _image_to_onebot_segment(image: RssImage) -> MessageSegment | str:
+    if image.failed:
+        return image.missing_text
     if image.raw:
         encoded = base64.b64encode(image.raw).decode()
         return MessageSegment.image(f"base64://{encoded}")
     if image.url:
         return MessageSegment.image(image.url)
     return image.missing_text
+
+
+def _video_to_onebot_segment(video: RssVideo) -> MessageSegment | str:
+    if video.failed:
+        return video.missing_text
+    if video.raw:
+        encoded = base64.b64encode(video.raw).decode()
+        return MessageSegment.video(f"base64://{encoded}")
+    if video.url:
+        return MessageSegment.video(video.url)
+    return video.missing_text
 
 
 def build_onebot_message(bot: Bot, message: RssMessage | list[RssMessage]) -> Message:
@@ -227,6 +240,12 @@ def build_onebot_single_message(message: RssMessage) -> Message:
             result += segment
         elif segment:
             result += MessageSegment.text("\n" + segment)
+    for video in message.videos:
+        segment = _video_to_onebot_segment(video)
+        if isinstance(segment, MessageSegment):
+            result += segment
+        elif segment:
+            result += MessageSegment.text("\n" + segment)
     return result
 
 
@@ -237,12 +256,23 @@ def build_uni_message(message: RssMessage) -> UniMessage:
     if message.link:
         result.append("\n" + message.link)
     for image in message.images:
-        if image.raw:
+        if image.failed and image.missing_text:
+            result.append("\n" + image.missing_text)
+        elif image.raw:
             result.image(raw=image.raw, name=image.name)
         elif image.url:
             result.image(url=image.url, name=image.name)
         elif image.missing_text:
             result.append("\n" + image.missing_text)
+    for video in message.videos:
+        if video.failed and video.missing_text:
+            result.append("\n" + video.missing_text)
+        elif video.raw:
+            result.video(raw=video.raw, mimetype=video.mimetype, name=video.name)
+        elif video.url:
+            result.video(url=video.url, mimetype=video.mimetype, name=video.name)
+        elif video.missing_text:
+            result.append("\n" + video.missing_text)
     return result
 
 

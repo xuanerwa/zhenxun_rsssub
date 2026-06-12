@@ -7,7 +7,7 @@ from nonebot import logger
 
 from ..delivery import DeliveryTarget
 from ..runtime_config import get_cached_config
-from ..rss_message import RssImage, RssMessage
+from ..rss_message import RssImage, RssMessage, RssVideo
 
 
 @dataclass
@@ -40,6 +40,7 @@ class Context:
     # 暂存单条 RSS 文章的解析结果
     msg_text_buffer: str = ""
     msg_image_buffer: list[RssImage] = field(default_factory=list)
+    msg_video_buffer: list[RssVideo] = field(default_factory=list)
     # 单轮 RSS 更新中的媒体下载预算，避免图片过多时内存和网络峰值过高
     media_bytes_used: int = 0
     media_error_count: int = 0
@@ -59,17 +60,25 @@ class Context:
     def flush_msg_buffer(self):
         """保存解析结果并清空缓冲区，为下次解析准备"""
         entry_hash = self.entry["hash"]  # 预处理第 1 步计算得到
-        message = RssMessage(text=self.msg_text_buffer, images=self.msg_image_buffer)
+        message = RssMessage(
+            text=self.msg_text_buffer,
+            images=self.msg_image_buffer,
+            videos=self.msg_video_buffer,
+        )
         if (
             not get_cached_config("push_on_image_parse_failed")
-            and any(image.failed for image in self.msg_image_buffer)
+            and (
+                any(image.failed for image in self.msg_image_buffer)
+                or any(video.failed for video in self.msg_video_buffer)
+            )
         ):
             logger.warning(
-                f"[{self.rss_name}] 图片解析失败，已跳过本条推送，等待下轮重试: {entry_hash}"
+                f"[{self.rss_name}] 媒体解析失败，已跳过本条推送，等待下轮重试: {entry_hash}"
             )
             self.skipped_entry_hashes.add(entry_hash)
             self.msg_text_buffer = ""
             self.msg_image_buffer = []
+            self.msg_video_buffer = []
             self.continue_process = True
             return
         if message.is_empty():
@@ -78,6 +87,7 @@ class Context:
         self.msg_contents[entry_hash] = message
         self.msg_text_buffer = ""
         self.msg_image_buffer = []
+        self.msg_video_buffer = []
         self.continue_process = True
 
     def flush_msg_contents(self):

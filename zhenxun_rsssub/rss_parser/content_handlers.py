@@ -19,12 +19,14 @@ from .context import Context
 from .html_document_processor import (
     extract_image_urls,
     extract_video_poster_urls,
+    extract_video_sources,
     handle_html_tags,
     html_text,
 )
 from .image_processor import get_rss_image
 from .rss_parser import ParsingHandlerManager
 from .utils import get_summary
+from .video_processor import get_rss_video, looks_like_video_url, parse_duration
 
 
 def _remaining_media_bytes(ctx: Context) -> int | None:
@@ -109,6 +111,128 @@ async def _append_rss_images(ctx: Context, rss: "RSS", urls: list[str]) -> None:
     ctx.msg_image_buffer.extend(images)
 
 
+async def _fetch_rss_video(
+    ctx: Context, rss: "RSS", url: URL, duration_seconds: float | None = None
+):
+    max_errors = _max_media_errors_per_update()
+    if max_errors and ctx.media_error_count >= max_errors:
+        from ..rss_message import RssVideo
+
+        return RssVideo(
+            url=str(url),
+            name=url.name or "video.mp4",
+            missing_text=f"本轮媒体下载失败过多，已跳过视频：{url}",
+            failed=True,
+        )
+
+    remaining_bytes = _remaining_media_bytes(ctx)
+    if remaining_bytes is not None and remaining_bytes <= 0:
+        from ..rss_message import RssVideo
+
+        return RssVideo(
+            url=str(url),
+            name=url.name or "video.mp4",
+            missing_text=f"媒体下载预算已用尽，已跳过视频：{url}",
+            failed=True,
+        )
+
+    timeout = _media_timeout_seconds()
+    try:
+        logger.debug(f"[{rss.name}] 开始处理视频: {url}")
+        video = await asyncio.wait_for(
+            get_rss_video(
+                url,
+                rss.use_proxy,
+                duration_seconds=duration_seconds,
+                remaining_bytes=remaining_bytes,
+            ),
+            timeout=timeout,
+        )
+    except asyncio.TimeoutError:
+        from ..rss_message import RssVideo
+
+        ctx.media_error_count += 1
+        logger.warning(f"[{rss.name}] 视频处理超时，已跳过: {url}")
+        return RssVideo(
+            url=str(url),
+            name=url.name or "video.mp4",
+            missing_text=f"视频处理超时，已跳过：{url}",
+            failed=True,
+        )
+    except Exception as e:
+        from ..rss_message import RssVideo
+
+        ctx.media_error_count += 1
+        logger.warning(f"[{rss.name}] 视频处理失败，已跳过: {url} ({e})")
+        return RssVideo(
+            url=str(url),
+            name=url.name or "video.mp4",
+            missing_text=f"视频处理失败，已跳过：{url}",
+            failed=True,
+        )
+    if video.failed:
+        ctx.media_error_count += 1
+    if video.bytes_used:
+        ctx.media_bytes_used += video.bytes_used
+    elif video.raw:
+        ctx.media_bytes_used += len(video.raw)
+    logger.debug(f"[{rss.name}] 视频处理完成: {url}")
+    return video
+
+
+async def _append_rss_videos(
+    ctx: Context, rss: "RSS", sources: list[tuple[str, float | None]]
+) -> None:
+    if not sources:
+        return
+    videos = await asyncio.gather(
+        *(_fetch_rss_video(ctx, rss, URL(url), duration) for url, duration in sources)
+    )
+    ctx.msg_video_buffer.extend(videos)
+
+
+def _entry_video_sources(entry: dict, summary: str, show_hidden_content: bool) -> list[tuple[str, float | None]]:
+    sources = [
+        (url, parse_duration(duration))
+        for url, duration in extract_video_sources(
+            summary, show_hidden_content=show_hidden_content
+        )
+    ]
+    for enclosure in entry.get("enclosures") or []:
+        href = enclosure.get("href") or enclosure.get("url")
+        mime = str(enclosure.get("type") or "").lower()
+        if href and (mime.startswith("video/") or looks_like_video_url(href)):
+            sources.append(
+                (
+                    href,
+                    parse_duration(
+                        str(
+                            enclosure.get("duration")
+                            or enclosure.get("media_duration")
+                            or ""
+                        )
+                    ),
+                )
+            )
+    for media in entry.get("media_content") or []:
+        href = media.get("url")
+        mime = str(media.get("type") or media.get("medium") or "").lower()
+        if href and (mime.startswith("video/") or mime == "video" or looks_like_video_url(href)):
+            sources.append(
+                (
+                    href,
+                    parse_duration(
+                        str(
+                            media.get("duration")
+                            or media.get("media_duration")
+                            or ""
+                        )
+                    ),
+                )
+            )
+    return list(dict.fromkeys(sources))
+
+
 @ParsingHandlerManager.process_handler(priority=0)
 async def validate_entry(ctx: Context, rss: "RSS"):
     """检查当前处理的文章是否有效"""
@@ -189,6 +313,15 @@ async def handle_images(ctx: Context, rss: "RSS"):
     await _append_rss_images(ctx, rss, entry_images)
 
     # 处理视频
+    if get_cached_config("video_download_enabled"):
+        video_sources = _entry_video_sources(
+            entry, summary, rss.show_hidden_content
+        )
+        if video_sources:
+            ctx.msg_text_buffer += "\n视频："
+            await _append_rss_videos(ctx, rss, video_sources)
+            return
+
     video_posters = extract_video_poster_urls(
         summary, show_hidden_content=rss.show_hidden_content
     )

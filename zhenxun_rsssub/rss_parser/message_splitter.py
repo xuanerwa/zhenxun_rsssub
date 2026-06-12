@@ -25,6 +25,7 @@ def truncate_message_text(message: RssMessage, limit: int) -> RssMessage:
     return RssMessage(
         text=truncate_text(message.text, limit),
         images=list(message.images),
+        videos=list(message.videos),
         link=message.link,
         nodes=list(message.nodes),
     )
@@ -121,6 +122,7 @@ def build_split_forward_messages(title: str, message: RssMessage, limit: int) ->
     titled_message = RssMessage(
         text=(f"{title}\n\n{message.text}" if title and message.text else title or message.text),
         images=list(message.images),
+        videos=list(message.videos),
         link=message.link,
         nodes=list(message.nodes),
     )
@@ -134,14 +136,16 @@ def build_split_forward_messages(title: str, message: RssMessage, limit: int) ->
             RssMessage(
                 text=chunk,
                 images=list(message.images) if index == 0 else [],
+                videos=list(message.videos) if index == 0 else [],
                 link=message.link if index == len(chunks) - 1 else "",
                 nodes=list(message.nodes) if index == 0 else [],
             )
         )
-    if not chunks and (message.images or message.link):
+    if not chunks and (message.images or message.videos or message.link):
         nodes.append(
             RssMessage(
                 images=list(message.images),
+                videos=list(message.videos),
                 link=message.link,
                 nodes=list(message.nodes),
             )
